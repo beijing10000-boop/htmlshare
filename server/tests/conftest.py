@@ -9,13 +9,30 @@ from fastapi.testclient import TestClient
 
 from htmlshare_server.app import create_app, hash_secret
 from htmlshare_server.config import Settings
-from htmlshare_server.feishu import FakeFeishu
+from htmlshare_server.feishu import Dept, FakeFeishu
 
 DIRECTORY = {
     "alice@example.com": "ou_alice",
     "bob@example.com": "ou_bob",
     "carol@example.com": "ou_carol",
     "13800000000": "ou_dave",
+    "dave@example.com": "ou_dave",
+}
+
+# 技术中心/运维部/一组、技术中心/研发部、销售部/运维部（与技术中心/运维部同名）、销售部/Sales Team
+DEPARTMENTS = [
+    Dept("od-tech", "技术中心", "0"),
+    Dept("od-ops", "运维部", "od-tech"),
+    Dept("od-ops-1", "一组", "od-ops"),
+    Dept("od-rd", "研发部", "od-tech"),
+    Dept("od-sales", "销售部", "0"),
+    Dept("od-sales-ops", "运维部", "od-sales"),
+    Dept("od-sales-team", "Sales Team", "od-sales"),
+]
+MEMBERSHIPS = {
+    "ou_bob": ["od-ops-1"],
+    "ou_carol": ["od-sales"],
+    "ou_dave": ["od-rd", "od-sales-team"],
 }
 
 
@@ -32,9 +49,10 @@ def make_settings(tmp_path: Path, **kw) -> Settings:
 
 
 class Env:
-    def __init__(self, tmp_path: Path, **kw):
+    def __init__(self, tmp_path: Path, feishu=None, **kw):
         self.settings = make_settings(tmp_path, **kw)
-        self.app = create_app(self.settings, feishu=FakeFeishu(DIRECTORY))
+        self.feishu = feishu or FakeFeishu(DIRECTORY, DEPARTMENTS, MEMBERSHIPS)
+        self.app = create_app(self.settings, feishu=self.feishu)
         self.db = self.app.state.db
 
     def browser(self, email: str | None = None) -> TestClient:

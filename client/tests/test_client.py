@@ -64,6 +64,17 @@ def test_cli_publish_ls_share_rm(env, report, capsys):
     assert "还没有发布过页面" in capsys.readouterr().out
 
 
+def test_cli_publish_to_department(env, report, capsys):
+    args = ["publish", str(report), "--name", "ops", "--to", "dept:技术中心/运维部,dept:运维部,dept:Sales Team"]
+    assert cli.main(args) == 0
+    out = capsys.readouterr().out
+    assert "可见人：部门:技术中心/运维部、部门:销售部/Sales Team" in out
+    assert "dept:运维部：有 2 个同名部门" in out
+
+    res = mcp_server.update_viewers("ops", remove=["dept:Sales Team"])
+    assert res["viewers"] == ["部门:技术中心/运维部"]
+
+
 def test_cli_error_exit_code(env, tmp_path, report, capsys):
     assert cli.main(["publish", str(tmp_path / "missing.html")]) == 1
     assert "找不到文件" in capsys.readouterr().err

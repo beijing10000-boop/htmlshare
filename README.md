@@ -27,8 +27,12 @@ AI 工具 ──(CLI / MCP)──▶ htmlshare 客户端 ──HTTPS + 个人 To
 3. **安全设置 → 重定向 URL**：添加 `<HTMLSHARE_PUBLIC_URL>/auth/callback`（必须与配置完全一致）。
 4. **权限管理** 开通：
    - `contact:user.id:readonly`：通过手机号或邮箱获取用户 ID（发布时把邮箱换成 open_id，必需）
+   - `contact:contact.base:readonly`：获取通讯录基本信息（按部门授权用，调用部门/用户接口的前提）
+   - `contact:department.base:readonly`：获取部门基础信息（按部门名授权）
+   - `contact:department.organize:readonly`：获取部门组织架构信息（上级部门，用于"含子部门"和完整路径）
+   - `contact:user.department:readonly`：获取用户组织架构信息（判断访问者属于哪些部门）
    - `contact:user.email:readonly`：获取用户邮箱（可选，只用于页面上显示）
-   - 具体名称以后台显示为准
+   - 具体名称以后台显示为准；缺哪个权限，接口报错里会直接给出申请链接
 5. **通讯录权限范围**（数据权限）设为「全部成员」，否则范围外的人查不到。
 6. **版本管理与发布**：可用范围选全员（或需要的部门），提交发布，等管理员审批。
 
@@ -72,8 +76,9 @@ htmlshare login --server https://share.example.com
 ```markdown
 ## 分享 HTML
 生成 HTML 报告或页面后，如果用户想分享给同事或要一个链接，用 htmlshare 发布：
-    htmlshare publish <文件绝对路径> --name <英文短名> --to <飞书邮箱,逗号分隔 | all>
-- 可见人用飞书邮箱或手机号，all 表示全员；用户没说给谁看就先问，不要擅自用 all。
+    htmlshare publish <文件绝对路径> --name <英文短名> --to <飞书邮箱,dept:部门名,... | all>
+- 可见人用飞书邮箱、手机号或 dept:部门名（含子部门），all 表示全员；用户没说给谁看就先问，不要擅自用 all。
+- 提示"同名部门"时，用提示里的完整路径重试（如 dept:技术中心/运维部）。
 - 输出里有"注意：以下可见人没有加上"时，要把原因告诉用户。
 - 修改可见人：htmlshare share <名字> --add a@x.com --remove b@x.com；查看我的页面：htmlshare ls
 ```
@@ -103,6 +108,7 @@ MCP 提供的工具：
 
 ```bash
 htmlshare publish report.html --name q3-report --to a@corp.com,13800000000 --expires 30
+htmlshare publish report.html --name ops-weekly --to "dept:技术中心/运维部,dept:研发部"
 htmlshare publish report.html --name q3-report          # 覆盖更新内容，可见人不变
 htmlshare share q3-report --add c@corp.com --remove a@corp.com
 htmlshare share q3-report --set all                      # 改成全员可见
@@ -114,12 +120,15 @@ htmlshare whoami / logout
 
 ## 权限规则
 
-- 可见人：飞书邮箱、手机号、`all`（任何本企业登录用户），也可以直接填 open_id（`ou_...`）。
+- 可见人：飞书邮箱、手机号、`dept:部门名`、`all`（任何本企业登录用户），也可以直接填 open_id（`ou_...`）。
+- 部门：`dept:运维部` 或 `部门:运维部`，**包含所有子部门**。有同名部门时会提示候选路径，
+  改写成完整路径或路径后缀即可（`dept:技术中心/运维部`）；也可以直接填 `dept:od-xxxx`（open_department_id）。
+  访问者的所属部门缓存 1 小时，部门树缓存 10 分钟；调岗后重新登录立即生效。
+  只有按部门授权的页面才会去查访问者的部门，飞书接口出错时返回 503「暂时无法确认权限」，不会误放行。
 - 发布者本人总能看。新页面不填可见人 = 仅自己可见；覆盖发布不填可见人 = 保留原名单。
 - 查不到的人会在返回结果的 `unresolved` 里列出原因，页面照常发布（只是少了这些人）。
 - 页面名全局唯一：同一个人再次发布同名 = 覆盖更新；名字被别人占用会返回 409。
 - 默认 30 天过期（`expires_days=0` 永不过期），过期页面自动清理。
-- 按部门授权（`dept:xxx`）目前会提示"二期支持"。
 
 ## 安全设计
 
@@ -137,14 +146,14 @@ htmlshare whoami / logout
 cd server && pip install -e .[dev] && pytest
 cd client && pip install -e .[dev] && pytest      # 客户端测试会在进程内拉起服务端
 
-# 不连飞书跑起来（登录页随便填邮箱）：
+# 不连飞书跑起来（登录页随便填邮箱；邮箱前缀 ops-/rd-/sales- 会被分到 技术中心/运维部、技术中心/研发部、销售部）：
 HTMLSHARE_PUBLIC_URL=http://localhost:8780 HTMLSHARE_DEV_FAKE_LOGIN=1 HTMLSHARE_DATA_DIR=./data \
   uvicorn --factory htmlshare_server.app:create_app --port 8780 --app-dir server
 ```
 
-## 二期计划
+## 后续计划
 
-- 按部门授权：`dept:部门名`，含子部门（通讯录部门接口 + 登录时缓存用户所属部门链）
+- ~~按部门授权~~（0.2.0 已完成）
 - 按飞书群授权、按姓名查人（AI 往往只知道名字）
 - 发布后用飞书机器人通知可见人
 - 网页端管理（改可见人、删页面、Token 列表与撤销）

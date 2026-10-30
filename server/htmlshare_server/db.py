@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -9,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -30,7 +31,7 @@ CREATE TABLE IF NOT EXISTS pages (
     expires_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS pages_owner ON pages(owner);
--- kind: user（value=open_id）| all（value='*'）| dept（二期）
+-- kind: user（value=open_id）| all（value='*'）| dept（value=open_department_id，含子部门）
 CREATE TABLE IF NOT EXISTS acl (
     page  TEXT NOT NULL,
     kind  TEXT NOT NULL,
@@ -60,6 +61,12 @@ CREATE TABLE IF NOT EXISTS access_log (
     allowed INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS access_log_page ON access_log(page, at);
+-- v2：用户直属部门缓存（只在访问按部门授权的页面时才查飞书）
+CREATE TABLE IF NOT EXISTS user_depts (
+    open_id    TEXT PRIMARY KEY,
+    dept_ids   TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL
+);
 """
 
 
@@ -181,12 +188,38 @@ class Database:
         return [AclEntry(r["kind"], r["value"], r["label"]) for r in rows]
 
     def acl_allows(self, page: str, open_id: str) -> bool:
+        """只看全员和个人；部门要结合用户所属部门另外判断（见 acl_dept_ids）。"""
         with self.conn() as c:
             row = c.execute(
                 "SELECT 1 FROM acl WHERE page=? AND ((kind='all') OR (kind='user' AND value=?)) LIMIT 1",
                 (page, open_id),
             ).fetchone()
         return row is not None
+
+    def acl_dept_ids(self, page: str) -> set[str]:
+        with self.conn() as c:
+            rows = c.execute("SELECT value FROM acl WHERE page=? AND kind='dept'", (page,)).fetchall()
+        return {r["value"] for r in rows}
+
+    # ---- user departments cache ----
+    def cached_user_depts(self, open_id: str, max_age: int) -> list[str] | None:
+        with self.conn() as c:
+            row = c.execute("SELECT dept_ids, fetched_at FROM user_depts WHERE open_id=?", (open_id,)).fetchone()
+        if not row or time.time() - row["fetched_at"] > max_age:
+            return None
+        return json.loads(row["dept_ids"])
+
+    def save_user_depts(self, open_id: str, dept_ids: list[str]) -> None:
+        with self.conn() as c:
+            c.execute(
+                "INSERT INTO user_depts(open_id, dept_ids, fetched_at) VALUES(?,?,?) "
+                "ON CONFLICT(open_id) DO UPDATE SET dept_ids=excluded.dept_ids, fetched_at=excluded.fetched_at",
+                (open_id, json.dumps(dept_ids), int(time.time())),
+            )
+
+    def clear_user_depts(self, open_id: str) -> None:
+        with self.conn() as c:
+            c.execute("DELETE FROM user_depts WHERE open_id=?", (open_id,))
 
     # ---- api tokens ----
     def add_token(self, token_hash: str, owner: str, label: str) -> None:

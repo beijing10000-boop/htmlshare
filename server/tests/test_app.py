@@ -88,10 +88,10 @@ def test_new_page_without_viewers_is_owner_only(env):
 
 
 def test_unresolved_viewers(env):
-    r = publish(env.api("ou_alice"), "p1", viewers="bob@example.com,nobody@example.com,dept:销售部,张三")
+    r = publish(env.api("ou_alice"), "p1", viewers="bob@example.com,nobody@example.com,dept:不存在的部门,张三")
     body = r.json()
     assert [v["value"] for v in body["viewers"]] == ["ou_bob"]
-    assert [u["input"] for u in body["unresolved"]] == ["dept:销售部", "张三", "nobody@example.com"]
+    assert [u["input"] for u in body["unresolved"]] == ["张三", "nobody@example.com", "dept:不存在的部门"]
 
 
 def test_overwrite_keeps_acl_and_blocks_others(env):
