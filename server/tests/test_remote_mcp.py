@@ -70,7 +70,8 @@ def mcp_session(base: str, token: str = TOKEN):
 def test_tools_and_instructions(live):
     out = mcp_session(live.base)([("whoami", {})])
     assert set(out["tools"]) == {
-        "prepare_upload", "publish_html", "update_viewers", "list_my_pages", "delete_page", "find_user", "whoami",
+        "prepare_upload", "publish_html", "update_viewers", "list_my_pages", "list_shared_with_me",
+        "delete_page", "find_user", "whoami",
     }
     assert "prepare_upload" in out["instructions"]
     ok, me = out["results"][0]
@@ -140,6 +141,26 @@ def test_update_find_delete(live):
     assert page["viewers"] == ["部门:技术中心/研发部"]
     assert [u["email"] for u in users["users"]] == ["dave@example.com"]
     assert deleted == {"ok": True, "name": "doc"}
+
+
+def test_list_shared_with_me(live):
+    publish(live.api("ou_bob"), "from-bob", html="<title>bob 给大家</title>", viewers="all")
+    publish(live.api("ou_bob"), "bob-private", html="<title>私有</title>")
+    out = mcp_session(live.base)([("list_shared_with_me", {})])
+    err, res = out["results"][0]
+    assert not err
+    assert res["pages"] == [
+        {
+            "url": f"{live.base}/from-bob.html",
+            "name": "from-bob",
+            "title": "bob 给大家",
+            "owner_name": "张三",  # bob 没在浏览器登录过，名字来自通讯录
+            "via": "全员可见",
+            "updated_at": res["pages"][0]["updated_at"],
+            "expires_at": res["pages"][0]["expires_at"],
+        }
+    ]
+    assert "note" not in res
 
 
 def test_mcp_requires_valid_token(live):

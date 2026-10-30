@@ -53,7 +53,6 @@ SESSION_COOKIE = "hs_session"
 OAUTH_COOKIE = "hs_oauth"
 CLI_LOGIN_TTL = 600
 DEPT_TREE_TTL = 600  # 部门树缓存 10 分钟
-USER_DEPT_TTL = 3600  # 用户所属部门缓存 1 小时（重新登录会立即刷新）
 
 
 @dataclass
@@ -153,20 +152,6 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
             raise HTTPException(401, "API Token 无效或已撤销，请重新运行 htmlshare login")
         return owner
 
-    def user_dept_chain(open_id: str) -> set[str]:
-        """用户直属部门 + 全部上级。直属部门缓存 USER_DEPT_TTL，部门树缓存 DEPT_TREE_TTL。"""
-        direct = db.cached_user_depts(open_id, USER_DEPT_TTL)
-        if direct is None:
-            direct = fs.user_department_ids(open_id)
-            db.save_user_depts(open_id, direct)
-        dept_dir.refresh()
-        if any(d not in dept_dir for d in direct):
-            dept_dir.refresh(force=True)  # 新建的部门，缓存里还没有
-        out: set[str] = set()
-        for d in direct:
-            out.update(dept_dir.chain(d))
-        return out
-
     def new_token(owner: str, label: str) -> str:
         token = "hs_" + secrets.token_urlsafe(32)
         db.add_token(hash_secret(token), owner, label)
@@ -262,9 +247,10 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
             for p in mine
         ]
         tokens = [dict(t) for t in db.list_tokens(user.open_id)]
+        shared = service.shared_with(user.open_id)
         wheel = client_wheel()
         install = f"pip install {s.public_url}/client/{wheel.name}" if wheel else "pip install <htmlshare 客户端包>"
-        return web.home(user.name or user.email, s.public_url, rows, install, tokens)
+        return web.home(user.name or user.email, s.public_url, rows, install, tokens, shared["pages"], shared["dept_error"])
 
     @app.post("/me/connect")
     def connect_ai(request: Request):
@@ -321,14 +307,14 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         allowed = page.owner == user.open_id or db.acl_allows(name, user.open_id)
         if not allowed and (wanted := db.acl_dept_ids(name)):
             try:
-                allowed = bool(wanted & user_dept_chain(user.open_id))
+                allowed = bool(wanted & service.user_dept_chain(user.open_id))
             except FeishuError as e:
                 log.warning("查询 %s 所属部门失败: %s", user.open_id, e)
                 db.log_access(name, user.open_id, False)
                 return web.message("暂时无法确认权限", "这个页面按部门授权，但查询你所在的部门时飞书接口出错，请稍后刷新重试。", 503, user.name)
         db.log_access(name, user.open_id, allowed)
         if not allowed:
-            return web.forbidden(user.name or user.email, db.user_name(page.owner), name)
+            return web.forbidden(user.name or user.email, service.display_name(page.owner), name)
         return Response(
             inject_shim(path.read_bytes()),
             headers={
@@ -426,6 +412,11 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
     @app.get("/api/pages")
     def api_list(owner: str = Depends(require_token)):
         return {"pages": service.list_pages(owner)}
+
+    @app.get("/api/shared-pages")
+    def api_shared(owner: str = Depends(require_token)):
+        """别人分享给我的页面（不放在 /api/pages/ 下，免得和名叫 shared 的页面冲突）。"""
+        return service.shared_with(owner)
 
     @app.get("/api/pages/{name}")
     def api_get(name: str, owner: str = Depends(require_token)):
