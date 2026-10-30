@@ -1,5 +1,18 @@
 # 更新记录
 
+## 0.4.0
+
+- **远程 MCP（免安装）**：服务端在 `/mcp` 提供 Streamable HTTP MCP（无状态、JSON 响应），AI 工具直接连，
+  同事电脑上不用装 Python 或任何软件。认证用 Bearer 凭证；没有有效凭证直接 401；Host/Origin 校验防 DNS 重绑定。
+- **一次性上传地址**：`prepare_upload` 返回 30 分钟有效、只能用一次、绑定页面名的上传地址和现成的 curl 命令，
+  AI 在终端 `curl -T 文件 地址` 上传（`PUT /api/uploads/<地址>`）；大文件不经过对话。不能执行命令时用 `publish_html` 直传内容。
+- **网页「接入 AI 工具」**：一键生成专用凭证和一段可直接复制给 AI 的话（含 Claude Code / Cursor 配置方式）。
+- **我的接入凭证**：首页列出全部凭证（名称、创建时间、最近使用），可逐个撤销。
+- 内部：页面业务逻辑抽到 `service.py`，REST、远程 MCP、一次性上传共用。schema v4：新增 `upload_tickets` 表（自动创建）。
+- 服务端新增依赖 `mcp==2.3.0`。客户端无功能变化。
+
+升级：服务器上 `git pull && docker compose up -d --build`；飞书应用无需新增权限。
+
 ## 0.3.0
 
 - 按姓名查人：可见人可以直接写姓名（中文名或英文名，忽略空格大小写），也可写 `name:张三`；

@@ -1,13 +1,14 @@
 # htmlshare — AI 生成的 HTML 一键发布到内网，飞书登录按人授权
 
-AI 工具（Claude Code、Cursor、Codex 等）生成 HTML 后，调用 `htmlshare` 的 CLI 或 MCP 把文件传到内网分享站，
+AI 工具（Claude Code、Cursor、Codex 等）生成 HTML 后，通过分享站提供的**远程 MCP**（免安装）或本地命令行把文件传到内网分享站，
 得到 `https://<分享站>/<名字>.html` 链接。发布时指定谁能看；访问者打开链接先走飞书登录，在名单里才能看到内容。
 
 ```
-AI 工具 ──(CLI / MCP)──▶ htmlshare 客户端 ──HTTPS + 个人 Token──▶ 分享服务
-                                                              ├─ 存文件 /data/pages/<名字>.html
-                                                              ├─ 存可见名单（open_id）
-                                                              └─ 调飞书：邮箱/手机号 → open_id
+AI 工具 ──远程 MCP（/mcp，Bearer token）──▶ 分享服务 ──▶ prepare_upload 返回一次性上传地址
+   └──── 终端里 curl -T 本地 HTML 文件 ─────────────▶ /api/uploads/<一次性地址>
+                                                    ├─ 存文件 /data/pages/<名字>.html
+                                                    ├─ 存可见名单（open_id / 部门）
+                                                    └─ 调飞书：邮箱/手机号/姓名/部门 → open_id
 
 浏览者打开 /<名字>.html → 未登录跳飞书授权 → 回调拿到 open_id → 在名单里就返回页面，否则 403
 ```
@@ -16,8 +17,8 @@ AI 工具 ──(CLI / MCP)──▶ htmlshare 客户端 ──HTTPS + 个人 To
 
 | 路径 | 说明 |
 | --- | --- |
-| `server/` | 服务端（FastAPI + SQLite），飞书登录、存储、权限、API |
-| `client/` | 客户端 Python 包 `htmlshare`：命令行 + MCP server（同一个包） |
+| `server/` | 服务端（FastAPI + SQLite）：飞书登录、存储、权限、REST API、远程 MCP |
+| `client/` | 可选的本地客户端 Python 包 `htmlshare`：命令行 + 本地 MCP（给不支持远程 MCP 的工具用） |
 | `Dockerfile` / `docker-compose.yml` | 部署；镜像里顺带打好客户端 wheel，供同事从分享站直接 `pip install` |
 
 ## 一、配置飞书应用（一次性）
@@ -55,24 +56,68 @@ curl http://<服务器IP>:8080/healthz
 - 在手机飞书里打开链接，需要手机连着内网或 VPN。
 - 建议在前面挂 Nginx/Caddy 做 HTTPS（用内网 CA 或公网证书都行）。如果用纯 http，Cookie 不会带 Secure 标记。
   如果飞书后台不接受 http 的重定向 URL，就必须上 HTTPS。
+- 远程 MCP 只接受 Host 为 `HTMLSHARE_PUBLIC_URL` 主机名（或本机）的请求（DNS 重绑定防护），换域名时同步改这个配置。
 
 数据都在 docker 卷 `htmlshare-data`（`/data`）：`htmlshare.db` 存元数据，`pages/` 存 HTML 文件。备份这个卷即可。
 
-## 三、客户端安装与登录（每个用户一次）
+## 三、接入 AI 工具（免安装，推荐）
+
+1. 浏览器打开分享站，用飞书登录，点 **「接入 AI 工具」**。
+2. 页面会生成一段话（含分享站地址和一个专用凭证），**复制发给你的 AI 工具**（Claude Code、Cursor 等），它会自己完成配置并调用 `whoami` 确认。
+3. 按 AI 的提示重启工具或新开会话，之后直接说「把这个报告发布出去，给张三和技术中心看」即可。
+
+各工具的配置方式（那段话里已经写好，AI 会照做）：
 
 ```bash
-pip install https://share.example.com/client/htmlshare-0.1.0-py3-none-any.whl
-htmlshare login --server https://share.example.com
+# Claude Code
+claude mcp add --transport http --scope user htmlshare http://<分享站>/mcp --header "Authorization: Bearer <凭证>"
 ```
 
-`login` 会打开浏览器：飞书登录 → 核对页面上的代码与终端一致 → 点「确认授权」。token 保存在 `~/.htmlshare/config.json`。
+```json
+// Cursor：~/.cursor/mcp.json
+{ "mcpServers": { "htmlshare": { "url": "http://<分享站>/mcp", "headers": { "Authorization": "Bearer <凭证>" } } } }
+```
 
-没法开浏览器的环境（远程服务器、CI）：在分享站首页点「生成 API Token」，然后设置环境变量
+**发布本地文件怎么传上去**：服务端读不到你电脑上的文件，所以分两步——AI 先调 `prepare_upload` 拿到一个
+**30 分钟有效、只能用一次、只能发布到指定页面名**的上传地址，再在终端执行 `curl -T 文件 地址`（Windows PowerShell 里是 `curl.exe`，
+Windows 10 以上和 macOS 自带）。这和 S3 / R2 预签名 URL 是同一个思路：大文件不经过对话、不费 token，命令里也不出现长期凭证。
+不能执行命令的工具才用 `publish_html` 直接传 HTML 内容。
+
+远程 MCP 提供的工具：
+
+| 工具 | 作用 |
+| --- | --- |
+| `prepare_upload` | 发布本地文件第一步：拿一次性上传地址（`name`、`viewers`、`expires_days`），返回现成的 curl 命令 |
+| `publish_html` | 直接传 `html_content` 发布（不能执行命令时用） |
+| `update_viewers` | 修改可见人：`add` / `remove` / `set_to`，也可改 `expires_days` |
+| `find_user` | 按姓名/英文名/邮箱查同事（部门、邮箱、open_id），处理重名 |
+| `list_my_pages` | 列出我发布的页面 |
+| `delete_page` | 删除页面 |
+| `whoami` | 当前凭证对应的身份 |
+
+凭证在分享站首页「我的接入凭证」里可以看到最近使用时间、随时撤销。
+
+> **Claude Desktop** 的远程连接要经过 Anthropic 云端，访问不到内网，请用下面的命令行客户端（本地 MCP）。
+
+## 四、命令行客户端（可选）
+
+适合 Claude Desktop 等不支持远程 MCP 的工具，或者习惯命令行的人。需要 Python 3.10+：
+
+```bash
+pip install http://<分享站>/client/htmlshare-<版本>-py3-none-any.whl
+htmlshare login --server http://<分享站>       # 浏览器飞书登录 → 核对代码 → 确认授权
+claude mcp add --scope user htmlshare -- htmlshare mcp   # 本地 MCP（stdio）
+```
+
+```json
+// Claude Desktop / Cursor 的本地 MCP 配置
+{ "mcpServers": { "htmlshare": { "command": "htmlshare", "args": ["mcp"] } } }
+```
+
+没法开浏览器的环境（远程服务器、CI）：在分享站首页「命令行客户端」里生成凭证，然后设置环境变量
 `HTMLSHARE_SERVER`、`HTMLSHARE_TOKEN`（优先级高于配置文件）。
 
-## 四、接入 AI 工具
-
-**能执行命令的工具（Claude Code、Codex、Gemini CLI……）** 直接用命令行就行。把下面这段放进项目的 `CLAUDE.md` / `AGENTS.md`：
+只能执行命令、不支持 MCP 的工具，把下面这段放进项目的 `CLAUDE.md` / `AGENTS.md`：
 
 ```markdown
 ## 分享 HTML
@@ -85,29 +130,7 @@ htmlshare login --server https://share.example.com
 - 修改可见人：htmlshare share <名字> --add a@x.com --remove b@x.com；查看我的页面：htmlshare ls
 ```
 
-**MCP**（Claude Code、Claude Desktop、Cursor 等）：
-
-```bash
-claude mcp add htmlshare -- htmlshare mcp
-```
-
-```json
-// Cursor / Claude Desktop 的 mcp 配置
-{ "mcpServers": { "htmlshare": { "command": "htmlshare", "args": ["mcp"] } } }
-```
-
-MCP 提供的工具：
-
-| 工具 | 作用 |
-| --- | --- |
-| `publish_html` | 发布：`file_path`（绝对路径）或 `html_content` 二选一，`name`、`viewers`、`expires_days` |
-| `update_viewers` | 修改可见人：`add` / `remove` / `set_to`，也可改 `expires_days` |
-| `find_user` | 按姓名/英文名/邮箱查同事（部门、邮箱、open_id），处理重名 |
-| `list_my_pages` | 列出我发布的页面 |
-| `delete_page` | 删除页面 |
-| `whoami` | 当前登录身份 |
-
-## 五、命令行
+常用命令：
 
 ```bash
 htmlshare publish report.html --name q3-report --to a@corp.com,13800000000 --expires 30
@@ -147,16 +170,19 @@ htmlshare whoami / logout
 - sandbox 下 `localStorage` / `sessionStorage` / `document.cookie` 会抛异常。服务端会注入一个小垫片，把它们换成内存版，
   避免 AI 生成的页面因为没写 try/catch 而整段脚本报错（数据只在当前页面生命周期内有效）。
 - 登录 Cookie：HttpOnly、SameSite=Lax、https 下加 Secure；OAuth 带 state 校验；`next` 参数只允许站内路径。
-- API 只认 Bearer token（数据库只存 sha256），不认 Cookie；CLI 登录采用设备码流程，需要用户在浏览器里核对代码并确认。
+- API 和远程 MCP 只认 Bearer token（数据库只存 sha256），不认 Cookie；`/mcp` 没有有效凭证直接 401，不进 MCP 会话；
+  另有 Host/Origin 校验防 DNS 重绑定。凭证可在首页逐个撤销，撤销后立即失效。
+- 一次性上传地址：随机 192 位、只存哈希、30 分钟过期、只能用一次、绑定发布者和页面名；内容校验不通过时不作废地址，可以修好文件重传。
+- CLI 登录采用设备码流程，需要用户在浏览器里核对代码并确认。
 - 访问记录写在 `access_log` 表（谁、什么时候、是否放行）。
-- 通讯录搜索接口（`/api/users/search`、`find_user`、`whois`）需要登录 token，只返回在职员工的姓名、英文名、部门、邮箱、open_id，
+- 通讯录搜索（`/api/users/search`、`find_user`、`whois`）需要凭证，只返回在职员工的姓名、英文名、部门、邮箱、open_id，
   不返回手机号——和员工在飞书里本来就能看到的范围一致。
 
 ## 本地开发
 
 ```bash
-cd server && pip install -e .[dev] && pytest
-cd client && pip install -e .[dev] && pytest      # 客户端测试会在进程内拉起服务端
+cd server && pip install -e .[dev] && pytest     # 远程 MCP 测试会起真实 uvicorn + MCP HTTP 客户端
+cd client && pip install -e .[dev] && pytest     # 客户端测试会在进程内拉起服务端
 
 # 不连飞书跑起来（登录页随便填邮箱；邮箱前缀 ops-/rd-/sales- 会被分到 技术中心/运维部、技术中心/研发部、销售部）：
 HTMLSHARE_PUBLIC_URL=http://localhost:8780 HTMLSHARE_DEV_FAKE_LOGIN=1 HTMLSHARE_DATA_DIR=./data \
@@ -165,8 +191,8 @@ HTMLSHARE_PUBLIC_URL=http://localhost:8780 HTMLSHARE_DEV_FAKE_LOGIN=1 HTMLSHARE_
 
 ## 后续计划
 
-- ~~按部门授权~~（0.2.0 已完成）、~~按姓名查人~~（0.3.0 已完成）
+- ~~按部门授权~~（0.2.0）、~~按姓名查人~~（0.3.0）、~~远程 MCP 免安装接入、凭证列表与撤销~~（0.4.0）
 - 按飞书群授权
 - 发布后用飞书机器人通知可见人
-- 网页端管理（改可见人、删页面、Token 列表与撤销）
-- 多文件页面（zip：HTML + 图片/JS）
+- 网页端管理页面（改可见人、删页面）
+- 多文件页面（zip：HTML + 图片/JS，沿用一次性上传地址 `curl -T site.zip`）

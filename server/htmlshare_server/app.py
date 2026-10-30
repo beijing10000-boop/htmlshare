@@ -5,11 +5,8 @@
 
 from __future__ import annotations
 
-import codecs
-import hashlib
 import html
 import logging
-import os
 import re
 import secrets
 import time
@@ -20,23 +17,23 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel
+from starlette.routing import Route
 
 from . import __version__, web
-from .acl import remove_viewers, resolve_viewers, split_viewers
 from .config import Settings
-from .db import AclEntry, Database, Page
+from .db import Database
 from .depts import DeptDirectory
 from .directory import UserDirectory
 from .feishu import FakeFeishu, FeishuClient, FeishuError
+from .remote_mcp import build_remote_mcp, connect_prompt
+from .service import NAME_RE, PageService, hash_secret
 
 log = logging.getLogger("htmlshare")
 
-NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
-TITLE_RE = re.compile(rb"<title[^>]*>(.*?)</title>", re.I | re.S)
-META_CHARSET_RE = re.compile(rb"<meta[^>]+charset\s*=\s*[\"']?([A-Za-z0-9_-]+)", re.I)
 HEAD_TAG_RE = re.compile(rb"<head(?:\s[^>]*)?>", re.I)
 HTML_TAG_RE = re.compile(rb"<html(?:\s[^>]*)?>", re.I)
 DOCTYPE_RE = re.compile(rb"<!doctype[^>]*>", re.I)
@@ -77,19 +74,6 @@ class CliPoll(BaseModel):
     device_code: str
 
 
-def hash_secret(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
-
-
-def normalize_name(raw: str) -> str:
-    name = raw.strip().lower()
-    if name.endswith(".html"):
-        name = name[:-5]
-    if not NAME_RE.match(name):
-        raise HTTPException(400, "页面名只能用小写字母、数字和连字符（-），1-64 个字符，不能以 - 开头或结尾")
-    return name
-
-
 def safe_next(target: str | None) -> str:
     if not target or not target.startswith("/") or target.startswith("//") or "\\" in target:
         return "/"
@@ -101,24 +85,6 @@ def safe_next(target: str | None) -> str:
 def normalize_user_code(raw: str) -> str:
     code = re.sub(r"[^A-Za-z0-9]", "", raw).upper()
     return f"{code[:4]}-{code[4:]}" if len(code) == 8 else code
-
-
-def sniff_charset(data: bytes) -> str:
-    m = META_CHARSET_RE.search(data[:4096])
-    if m:
-        try:
-            return codecs.lookup(m.group(1).decode("ascii")).name
-        except LookupError:
-            pass
-    return "utf-8"
-
-
-def extract_title(data: bytes, charset: str | None) -> str:
-    m = TITLE_RE.search(data[:65536])
-    if not m:
-        return ""
-    text = m.group(1).decode(charset or sniff_charset(data), errors="replace")
-    return " ".join(html.unescape(text).split())[:200]
 
 
 def inject_shim(data: bytes) -> bytes:
@@ -142,53 +108,24 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
     fs = feishu or (FakeFeishu() if s.dev_fake_login else FeishuClient(s))
     dept_dir = DeptDirectory(fs, ttl=DEPT_TREE_TTL)
     user_dir = UserDirectory(fs, dept_dir, db, interval=s.directory_sync_hours * 3600)
+    service = PageService(s, db, fs, dept_dir, user_dir, pages_dir)
+    mcp_gate, mcp_server = build_remote_mcp(service, db, s)
+    signer = URLSafeTimedSerializer(s.secret_key, salt="htmlshare-session")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if s.directory_sync:
             user_dir.start()  # 后台线程；快照过期（或从没同步过）时立即同步一次
-        yield
-    signer = URLSafeTimedSerializer(s.secret_key, salt="htmlshare-session")
-    max_bytes = s.max_upload_mb * 1024 * 1024
+        async with mcp_server.session_manager.run():
+            yield
 
     app = FastAPI(title="htmlshare", version=__version__, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.settings = s
     app.state.db = db
     app.state.user_dir = user_dir
+    app.state.service = service
 
     # ---------- helpers ----------
-    def page_path(name: str) -> Path:
-        return pages_dir / f"{name}.html"
-
-    def iso(ts: int | None) -> str | None:
-        return datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds") if ts else None
-
-    def page_json(p: Page, acl: list[AclEntry] | None = None) -> dict:
-        acl = db.get_acl(p.name) if acl is None else acl
-        return {
-            "name": p.name,
-            "url": f"{s.public_url}/{p.name}.html",
-            "title": p.title,
-            "size": p.size,
-            "owner": p.owner,
-            "owner_name": db.user_name(p.owner),
-            "viewers": [e.as_dict() for e in acl],
-            "created_at": iso(p.created_at),
-            "updated_at": iso(p.updated_at),
-            "expires_at": iso(p.expires_at),
-        }
-
-    def expiry_from_days(days: int, now: int) -> int | None:
-        if days < 0 or days > s.max_expire_days:
-            raise HTTPException(400, f"过期天数必须在 0-{s.max_expire_days} 之间（0 表示永不过期）")
-        return None if days == 0 else now + days * 86400
-
-    def purge_expired() -> None:
-        for name in db.expired_pages(int(time.time())):
-            page_path(name).unlink(missing_ok=True)
-            db.delete_page(name)
-            log.info("已清理过期页面 %s", name)
-
     def read_session(request: Request) -> Viewer | None:
         raw = request.cookies.get(SESSION_COOKIE)
         if not raw:
@@ -215,20 +152,6 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         if not owner:
             raise HTTPException(401, "API Token 无效或已撤销，请重新运行 htmlshare login")
         return owner
-
-    def owned_page(name: str, owner: str) -> Page:
-        page = db.get_page(normalize_name(name))
-        if not page or page.expired():
-            raise HTTPException(404, f"页面 {name} 不存在")
-        if page.owner != owner:
-            raise HTTPException(403, f"页面 {name} 不是你发布的")
-        return page
-
-    def resolve_or_502(items: list[str]):
-        try:
-            return resolve_viewers(items, fs, dept_dir, user_dir)
-        except FeishuError as e:
-            raise HTTPException(502, str(e)) from None
 
     def user_dept_chain(open_id: str) -> set[str]:
         """用户直属部门 + 全部上级。直属部门缓存 USER_DEPT_TTL，部门树缓存 DEPT_TREE_TTL。"""
@@ -324,7 +247,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         user = read_session(request)
         if not user:
             return login_redirect(request)
-        purge_expired()
+        service.purge_expired()
         mine = db.list_pages(user.open_id)
         views = db.view_counts([p.name for p in mine])
         rows = [
@@ -338,9 +261,21 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
             }
             for p in mine
         ]
+        tokens = [dict(t) for t in db.list_tokens(user.open_id)]
         wheel = client_wheel()
         install = f"pip install {s.public_url}/client/{wheel.name}" if wheel else "pip install <htmlshare 客户端包>"
-        return web.home(user.name or user.email, s.public_url, rows, install)
+        return web.home(user.name or user.email, s.public_url, rows, install, tokens)
+
+    @app.post("/me/connect")
+    def connect_ai(request: Request):
+        """生成一个专用 token，并给出一段可以直接复制给 AI 工具的话（AI 自己配置远程 MCP）。"""
+        user = read_session(request)
+        if not user:
+            return login_redirect(request)
+        if not origin_ok(request):
+            return web.message("请求被拒绝", "来源校验失败。", status=403)
+        token = new_token(user.open_id, f"AI 接入 {datetime.now():%Y-%m-%d %H:%M}")
+        return web.connect(user.name or user.email, connect_prompt(s.public_url, token))
 
     @app.post("/me/tokens")
     def create_web_token(request: Request):
@@ -349,8 +284,18 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
             return login_redirect(request)
         if not origin_ok(request):
             return web.message("请求被拒绝", "来源校验失败。", status=403)
-        token = new_token(user.open_id, f"web {datetime.now():%Y-%m-%d}")
+        token = new_token(user.open_id, f"命令行 {datetime.now():%Y-%m-%d %H:%M}")
         return web.token_created(user.name, token, s.public_url)
+
+    @app.post("/me/tokens/{token_id}/revoke")
+    def revoke_web_token(token_id: int, request: Request):
+        user = read_session(request)
+        if not user:
+            return login_redirect(request)
+        if not origin_ok(request):
+            return web.message("请求被拒绝", "来源校验失败。", status=403)
+        db.revoke_token_id(user.open_id, token_id)
+        return RedirectResponse("/#tokens", status_code=303)
 
     @app.get("/client/{filename}")
     def client_download(filename: str):
@@ -370,7 +315,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
             return login_redirect(request)
         name = name.lower()
         page = db.get_page(name) if NAME_RE.match(name) else None
-        path = page_path(name)
+        path = service.page_path(name)
         if not page or page.expired() or not path.is_file():
             return web.message("页面不存在", "页面不存在或已过期。", status=404, user_name=user.name)
         allowed = page.owner == user.open_id or db.acl_allows(name, user.open_id)
@@ -440,14 +385,14 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         token = "hs_" + secrets.token_urlsafe(32)
         if not db.approve_cli_login(code, user.open_id, token):
             return web.message("授权失败", "这个登录请求不存在或已过期，请在终端重新运行 htmlshare login。", 404, user.name)
-        db.add_token(hash_secret(token), user.open_id, f"cli {datetime.now():%Y-%m-%d}")
+        db.add_token(hash_secret(token), user.open_id, f"命令行 {datetime.now():%Y-%m-%d %H:%M}")
         log.info("CLI 登录授权 %s", user.open_id)
         return web.message("授权成功", "已授权，可以回到终端继续了。这个页面可以关闭。", user_name=user.name)
 
     # ---------- API ----------
     @app.get("/api/me")
     def api_me(owner: str = Depends(require_token)):
-        return {"open_id": owner, "name": db.user_name(owner), "server": s.public_url}
+        return service.me(owner)
 
     @app.post("/api/tokens/revoke")
     def api_revoke(request: Request, owner: str = Depends(require_token)):
@@ -457,22 +402,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
     @app.get("/api/users/search")
     def api_user_search(q: str, owner: str = Depends(require_token)):
         """按姓名/英文名/邮箱关键字查同事，给 AI 在重名时挑人用。只返回在职员工的姓名、部门、邮箱、open_id。"""
-        q = q.strip()
-        if not q:
-            raise HTTPException(400, "请提供搜索关键字")
-        synced = user_dir.synced_at()
-        if synced is None:
-            raise HTTPException(503, "通讯录还在同步（服务启动后约 1 分钟），请稍后重试")
-        users = user_dir.search(q)
-        if not users:
-            user_dir.kick()
-        return {
-            "synced_at": iso(synced),
-            "users": [
-                {"open_id": u.open_id, "name": u.name, "en_name": u.en_name, "email": u.email, "departments": user_dir.dept_paths(u)}
-                for u in users
-            ],
-        }
+        return service.search_users(q)
 
     @app.post("/api/pages")
     def api_publish(
@@ -482,103 +412,34 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         viewers: str | None = Form(None),
         expires_days: int | None = Form(None),
     ):
-        name = normalize_name(name)
-        data = file.file.read(max_bytes + 1)
-        if not data:
-            raise HTTPException(400, "文件是空的")
-        if len(data) > max_bytes:
+        return service.publish(owner, name, file.file.read(service.max_bytes + 1), viewers, expires_days)
+
+    @app.api_route("/api/uploads/{ticket}", methods=["PUT", "POST"])
+    async def api_upload(ticket: str, request: Request):
+        """一次性上传地址（由 MCP 的 prepare_upload 生成）：请求体就是 HTML 文件本身，curl -T 即可。"""
+        length = request.headers.get("content-length")
+        if length and length.isdigit() and int(length) > service.max_bytes:
             raise HTTPException(413, f"文件超过 {s.max_upload_mb} MB 上限")
-        if b"\x00" in data[:4096]:
-            raise HTTPException(400, "这看起来不是 HTML 文本文件")
-        purge_expired()
-
-        existing = db.get_page(name)
-        if existing and existing.owner != owner:
-            raise HTTPException(409, f"页面名 {name} 已被 {db.user_name(existing.owner) or '别人'} 占用，请换一个名字")
-
-        resolved = resolve_or_502(split_viewers(viewers)) if viewers is not None else None
-        now = int(time.time())
-        if expires_days is not None:
-            expires_at = expiry_from_days(expires_days, now)
-        elif existing:
-            expires_at = existing.expires_at
-        else:
-            expires_at = expiry_from_days(s.default_expire_days, now)
-
-        try:
-            data.decode("utf-8")
-            charset = "utf-8"
-        except UnicodeDecodeError:
-            charset = None
-        page = Page(
-            name=name,
-            owner=owner,
-            title=extract_title(data, charset),
-            size=len(data),
-            sha256=hashlib.sha256(data).hexdigest(),
-            charset=charset,
-            created_at=existing.created_at if existing else now,
-            updated_at=now,
-            expires_at=expires_at,
-        )
-        tmp = page_path(name).with_suffix(f".tmp{os.getpid()}")
-        tmp.write_bytes(data)
-        os.replace(tmp, page_path(name))
-        db.save_page(page, resolved.entries if resolved else ([] if not existing else None))
-        log.info("发布 %s by %s (%d bytes)", name, owner, len(data))
-        out = page_json(page)
-        out["created"] = existing is None
-        out["unresolved"] = resolved.unresolved if resolved else []
-        return out
+        data = await request.body()
+        return await run_in_threadpool(service.finish_upload, ticket, data)
 
     @app.get("/api/pages")
     def api_list(owner: str = Depends(require_token)):
-        purge_expired()
-        mine = db.list_pages(owner)
-        views = db.view_counts([p.name for p in mine])
-        out = []
-        for p in mine:
-            item = page_json(p)
-            item["views"] = views.get(p.name, 0)
-            out.append(item)
-        return {"pages": out}
+        return {"pages": service.list_pages(owner)}
 
     @app.get("/api/pages/{name}")
     def api_get(name: str, owner: str = Depends(require_token)):
-        return page_json(owned_page(name, owner))
+        return service.get_page(owner, name)
 
     @app.patch("/api/pages/{name}")
     def api_update(name: str, body: PageUpdate, owner: str = Depends(require_token)):
-        page = owned_page(name, owner)
-        unresolved: list[dict] = []
-        if body.set_viewers is not None or body.add_viewers or body.remove_viewers:
-            if body.set_viewers is not None:
-                resolved = resolve_or_502(split_viewers(body.set_viewers))
-                acl = resolved.entries
-                unresolved += resolved.unresolved
-            else:
-                acl = db.get_acl(page.name)
-            if body.add_viewers:
-                resolved = resolve_or_502(split_viewers(body.add_viewers))
-                have = {(e.kind, e.value) for e in acl}
-                acl += [e for e in resolved.entries if (e.kind, e.value) not in have]
-                unresolved += resolved.unresolved
-            if body.remove_viewers:
-                acl = remove_viewers(acl, split_viewers(body.remove_viewers), user_dir)
-            db.replace_acl(page.name, acl)
-        if body.expires_days is not None:
-            page.expires_at = expiry_from_days(body.expires_days, int(time.time()))
-            db.set_expiry(page.name, page.expires_at)
-        out = page_json(page)
-        out["unresolved"] = unresolved
-        return out
+        return service.update(owner, name, body.set_viewers, body.add_viewers, body.remove_viewers, body.expires_days)
 
     @app.delete("/api/pages/{name}")
     def api_delete(name: str, owner: str = Depends(require_token)):
-        page = owned_page(name, owner)
-        page_path(page.name).unlink(missing_ok=True)
-        db.delete_page(page.name)
-        log.info("删除 %s by %s", page.name, owner)
-        return {"ok": True, "name": page.name}
+        return service.delete(owner, name)
+
+    # ---------- 远程 MCP ----------
+    app.router.routes.append(Route("/mcp", endpoint=mcp_gate))
 
     return app
