@@ -1,0 +1,265 @@
+"""SQLite 存储：页面元数据、权限名单、API Token、CLI 登录请求、访问日志。"""
+
+from __future__ import annotations
+
+import sqlite3
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator
+
+SCHEMA_VERSION = 1
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    open_id    TEXT PRIMARY KEY,
+    name       TEXT NOT NULL DEFAULT '',
+    email      TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pages (
+    name       TEXT PRIMARY KEY,
+    owner      TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    size       INTEGER NOT NULL,
+    sha256     TEXT NOT NULL,
+    charset    TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    expires_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS pages_owner ON pages(owner);
+-- kind: user（value=open_id）| all（value='*'）| dept（二期）
+CREATE TABLE IF NOT EXISTS acl (
+    page  TEXT NOT NULL,
+    kind  TEXT NOT NULL,
+    value TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (page, kind, value)
+);
+CREATE TABLE IF NOT EXISTS api_tokens (
+    token_hash   TEXT PRIMARY KEY,
+    owner        TEXT NOT NULL,
+    label        TEXT NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS cli_logins (
+    device_hash TEXT PRIMARY KEY,
+    user_code   TEXT NOT NULL UNIQUE,
+    owner       TEXT,
+    token       TEXT,
+    expires_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS access_log (
+    id      INTEGER PRIMARY KEY,
+    page    TEXT NOT NULL,
+    open_id TEXT NOT NULL,
+    at      INTEGER NOT NULL,
+    allowed INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS access_log_page ON access_log(page, at);
+"""
+
+
+@dataclass
+class Page:
+    name: str
+    owner: str
+    title: str
+    size: int
+    sha256: str
+    charset: str | None
+    created_at: int
+    updated_at: int
+    expires_at: int | None
+
+    def expired(self, now: int | None = None) -> bool:
+        return self.expires_at is not None and self.expires_at <= (now or int(time.time()))
+
+
+@dataclass
+class AclEntry:
+    kind: str
+    value: str
+    label: str
+
+    def as_dict(self) -> dict:
+        return {"kind": self.kind, "value": self.value, "label": self.label}
+
+
+class Database:
+    def __init__(self, path: Path):
+        self.path = path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self.conn() as c:
+            c.execute("PRAGMA journal_mode=WAL")
+            c.executescript(SCHEMA)
+            c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+    @contextmanager
+    def conn(self) -> Iterator[sqlite3.Connection]:
+        c = sqlite3.connect(self.path, timeout=10)
+        c.row_factory = sqlite3.Row
+        try:
+            with c:
+                yield c
+        finally:
+            c.close()
+
+    # ---- users ----
+    def upsert_user(self, open_id: str, name: str, email: str) -> None:
+        with self.conn() as c:
+            c.execute(
+                "INSERT INTO users(open_id, name, email, updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(open_id) DO UPDATE SET name=excluded.name, email=excluded.email, updated_at=excluded.updated_at",
+                (open_id, name, email, int(time.time())),
+            )
+
+    def user_name(self, open_id: str) -> str:
+        with self.conn() as c:
+            row = c.execute("SELECT name, email FROM users WHERE open_id=?", (open_id,)).fetchone()
+        if not row:
+            return ""
+        return row["name"] or row["email"]
+
+    # ---- pages ----
+    def get_page(self, name: str) -> Page | None:
+        with self.conn() as c:
+            row = c.execute("SELECT * FROM pages WHERE name=?", (name,)).fetchone()
+        return Page(**dict(row)) if row else None
+
+    def save_page(self, page: Page, acl: list[AclEntry] | None) -> None:
+        """新建或覆盖页面；acl 为 None 时保留原权限名单。"""
+        with self.conn() as c:
+            c.execute(
+                "INSERT INTO pages(name, owner, title, size, sha256, charset, created_at, updated_at, expires_at) "
+                "VALUES(:name,:owner,:title,:size,:sha256,:charset,:created_at,:updated_at,:expires_at) "
+                "ON CONFLICT(name) DO UPDATE SET title=excluded.title, size=excluded.size, sha256=excluded.sha256, "
+                "charset=excluded.charset, updated_at=excluded.updated_at, expires_at=excluded.expires_at",
+                page.__dict__,
+            )
+            if acl is not None:
+                self._replace_acl(c, page.name, acl)
+
+    def set_expiry(self, name: str, expires_at: int | None) -> None:
+        with self.conn() as c:
+            c.execute("UPDATE pages SET expires_at=? WHERE name=?", (expires_at, name))
+
+    def delete_page(self, name: str) -> None:
+        with self.conn() as c:
+            c.execute("DELETE FROM pages WHERE name=?", (name,))
+            c.execute("DELETE FROM acl WHERE page=?", (name,))
+
+    def list_pages(self, owner: str) -> list[Page]:
+        with self.conn() as c:
+            rows = c.execute("SELECT * FROM pages WHERE owner=? ORDER BY updated_at DESC", (owner,)).fetchall()
+        return [Page(**dict(r)) for r in rows]
+
+    def expired_pages(self, now: int) -> list[str]:
+        with self.conn() as c:
+            rows = c.execute("SELECT name FROM pages WHERE expires_at IS NOT NULL AND expires_at <= ?", (now,)).fetchall()
+        return [r["name"] for r in rows]
+
+    # ---- acl ----
+    @staticmethod
+    def _replace_acl(c: sqlite3.Connection, page: str, acl: list[AclEntry]) -> None:
+        c.execute("DELETE FROM acl WHERE page=?", (page,))
+        c.executemany(
+            "INSERT OR IGNORE INTO acl(page, kind, value, label) VALUES(?,?,?,?)",
+            [(page, e.kind, e.value, e.label) for e in acl],
+        )
+
+    def replace_acl(self, page: str, acl: list[AclEntry]) -> None:
+        with self.conn() as c:
+            self._replace_acl(c, page, acl)
+
+    def get_acl(self, page: str) -> list[AclEntry]:
+        with self.conn() as c:
+            rows = c.execute("SELECT kind, value, label FROM acl WHERE page=? ORDER BY kind, label", (page,)).fetchall()
+        return [AclEntry(r["kind"], r["value"], r["label"]) for r in rows]
+
+    def acl_allows(self, page: str, open_id: str) -> bool:
+        with self.conn() as c:
+            row = c.execute(
+                "SELECT 1 FROM acl WHERE page=? AND ((kind='all') OR (kind='user' AND value=?)) LIMIT 1",
+                (page, open_id),
+            ).fetchone()
+        return row is not None
+
+    # ---- api tokens ----
+    def add_token(self, token_hash: str, owner: str, label: str) -> None:
+        with self.conn() as c:
+            c.execute(
+                "INSERT INTO api_tokens(token_hash, owner, label, created_at) VALUES(?,?,?,?)",
+                (token_hash, owner, label, int(time.time())),
+            )
+
+    def token_owner(self, token_hash: str) -> str | None:
+        now = int(time.time())
+        with self.conn() as c:
+            row = c.execute("SELECT owner, last_used_at FROM api_tokens WHERE token_hash=?", (token_hash,)).fetchone()
+            if not row:
+                return None
+            if not row["last_used_at"] or now - row["last_used_at"] > 300:
+                c.execute("UPDATE api_tokens SET last_used_at=? WHERE token_hash=?", (now, token_hash))
+        return row["owner"]
+
+    def revoke_token(self, token_hash: str) -> None:
+        with self.conn() as c:
+            c.execute("DELETE FROM api_tokens WHERE token_hash=?", (token_hash,))
+
+    # ---- cli device login ----
+    def add_cli_login(self, device_hash: str, user_code: str, expires_at: int) -> None:
+        with self.conn() as c:
+            c.execute("DELETE FROM cli_logins WHERE expires_at <= ?", (int(time.time()),))
+            c.execute(
+                "INSERT INTO cli_logins(device_hash, user_code, expires_at) VALUES(?,?,?)",
+                (device_hash, user_code, expires_at),
+            )
+
+    def pending_cli_login(self, user_code: str) -> sqlite3.Row | None:
+        with self.conn() as c:
+            return c.execute(
+                "SELECT * FROM cli_logins WHERE user_code=? AND owner IS NULL AND expires_at > ?",
+                (user_code, int(time.time())),
+            ).fetchone()
+
+    def approve_cli_login(self, user_code: str, owner: str, token: str) -> bool:
+        with self.conn() as c:
+            cur = c.execute(
+                "UPDATE cli_logins SET owner=?, token=? WHERE user_code=? AND owner IS NULL AND expires_at > ?",
+                (owner, token, user_code, int(time.time())),
+            )
+            return cur.rowcount == 1
+
+    def take_cli_login(self, device_hash: str) -> sqlite3.Row | None:
+        """返回登录请求；若已授权则同时删除（token 只能取一次）。"""
+        with self.conn() as c:
+            row = c.execute(
+                "SELECT * FROM cli_logins WHERE device_hash=? AND expires_at > ?",
+                (device_hash, int(time.time())),
+            ).fetchone()
+            if row and row["owner"]:
+                c.execute("DELETE FROM cli_logins WHERE device_hash=?", (device_hash,))
+            return row
+
+    # ---- access log ----
+    def log_access(self, page: str, open_id: str, allowed: bool) -> None:
+        with self.conn() as c:
+            c.execute(
+                "INSERT INTO access_log(page, open_id, at, allowed) VALUES(?,?,?,?)",
+                (page, open_id, int(time.time()), int(allowed)),
+            )
+
+    def view_counts(self, pages: list[str]) -> dict[str, int]:
+        if not pages:
+            return {}
+        marks = ",".join("?" * len(pages))
+        with self.conn() as c:
+            rows = c.execute(
+                f"SELECT page, COUNT(*) AS n FROM access_log WHERE allowed=1 AND page IN ({marks}) GROUP BY page",
+                pages,
+            ).fetchall()
+        return {r["page"]: r["n"] for r in rows}

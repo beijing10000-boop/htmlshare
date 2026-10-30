@@ -1,0 +1,16 @@
+services:
+  htmlshare:
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    image: htmlshare:0.1.0
+    env_file: .env
+    ports:
+      - "${HTMLSHARE_BIND:-0.0.0.0}:${HTMLSHARE_PORT:-8080}:8080"
+    volumes:
+      - htmlshare-data:/data
+    restart: unless-stopped
+
+volumes:
+  htmlshare-data:
