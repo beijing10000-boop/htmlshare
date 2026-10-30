@@ -233,3 +233,19 @@ def test_connect_prompt_escapes_nothing_weird():
     p = connect_prompt("http://share.example.com", "hs_abc")
     assert '"htmlshare": {"url": "http://share.example.com/mcp", "headers": {"Authorization": "Bearer hs_abc"}}' in p
     assert "不要写进项目目录或提交到 git" in p
+    assert "ChatGPT 网页版" in p and "改用 Codex 或 Claude Code" in p
+
+
+def test_connect_prompt_codex_snippet_is_valid_toml():
+    import tomllib
+
+    p = connect_prompt("http://share.example.com", "hs_abc")
+    lines = p.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == "[mcp_servers.htmlshare]")
+    snippet = "\n".join(line.strip() for line in lines[start : start + 3])
+    cfg = tomllib.loads(snippet)
+    assert cfg == {
+        "mcp_servers": {
+            "htmlshare": {"url": "http://share.example.com/mcp", "http_headers": {"Authorization": "Bearer hs_abc"}}
+        }
+    }

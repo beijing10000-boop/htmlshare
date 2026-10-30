@@ -97,6 +97,12 @@ def connect_prompt(public_url: str, token: str) -> str:
 按你自己的类型配置（配置写到用户级，不要写进项目目录或提交到 git——这个 token 等同于我的身份）：
 - 如果你是 Claude Code：运行 claude mcp add --transport http --scope user htmlshare {url} --header "Authorization: Bearer {token}"，再用 claude mcp get htmlshare 确认
 - 如果你是 Cursor：在 ~/.cursor/mcp.json 的 mcpServers 里加入 "htmlshare": {cursor}
+- 如果你是 OpenAI Codex（命令行、IDE 插件或 ChatGPT 桌面 App 里的 Codex，它们共用一份配置）：在 ~/.codex/config.toml 里加入
+    [mcp_servers.htmlshare]
+    url = "{url}"
+    http_headers = {{ "Authorization" = "Bearer {token}" }}
+  然后用 codex mcp list 确认；IDE 插件需要点 Restart extension
+- 如果你是 ChatGPT 网页版或聊天里的连接器：不用配置，直接告诉我"ChatGPT 的连接器是从 OpenAI 云端访问的，连不到公司内网，请改用 Codex 或 Claude Code"
 - 其他支持远程 MCP 的工具：按它自己的方式配置上面的地址和请求头
 
 配置完成后告诉我是否需要重启工具或新开会话；生效后调用 htmlshare 的 whoami 工具，确认返回的是我的名字。"""

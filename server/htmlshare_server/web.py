@@ -112,7 +112,7 @@ def home(
         token_table = '<p class="muted">还没有。</p>'
     body = f"""
 <div class="card"><h2>接入 AI 工具</h2>
-<p>不用安装任何软件：点下面的按钮，把生成的一段话复制发给你的 AI 工具（Claude Code、Cursor 等），它会自己完成配置。</p>
+<p>不用安装任何软件：点下面的按钮，把生成的一段话复制发给你的 AI 工具（Claude Code、Cursor、Codex 等），它会自己完成配置。</p>
 <form method="post" action="/me/connect"><button type="submit">接入 AI 工具</button></form>
 <p class="muted">接好以后直接对 AI 说「把这个报告发布出去，给张三和技术中心看」就行。
 可见人可以说姓名、飞书邮箱、手机号、部门（含子部门）或全员。</p>
@@ -135,12 +135,13 @@ claude mcp add --scope user htmlshare -- htmlshare mcp</pre>
 
 def connect(user_name: str, prompt: str) -> HTMLResponse:
     body = f"""<div class="card"><h2>接入 AI 工具</h2>
-<p>把下面这段话<b>完整复制</b>，发给你的 AI 工具（Claude Code、Cursor 等），它会自己完成配置并确认接通。</p>
+<p>把下面这段话<b>完整复制</b>，发给你的 AI 工具（Claude Code、Cursor、Codex 等），它会自己完成配置并确认接通。</p>
 <textarea id="prompt" readonly rows="16">{escape(prompt)}</textarea>
 <p><button id="copy" type="button">复制这段话</button> <span id="copied" class="muted"></span></p>
 <p class="warn">这段话里含有你的接入凭证，只显示这一次。它等同于你的身份：不要发到群里或发给别人。
 不用了可以在首页「我的接入凭证」里撤销。</p>
-<p class="muted">Claude Desktop 等不支持远程 MCP 的工具，请用首页「命令行客户端」的方式。</p>
+<p class="muted">ChatGPT 网页版的连接器从 OpenAI 云端访问，连不到公司内网，请改用 Codex（或 ChatGPT 桌面 App 里的 Codex）。
+Claude Desktop 同理，请用首页「命令行客户端」的方式。</p>
 <p><a href="/">返回首页</a></p></div>
 <script>
 document.getElementById("copy").onclick = function () {{
