@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -10,7 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 2
+from .feishu import DirUser
+
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -67,7 +70,28 @@ CREATE TABLE IF NOT EXISTS user_depts (
     dept_ids   TEXT NOT NULL,
     fetched_at INTEGER NOT NULL
 );
+-- v3：通讯录快照（按姓名查人用），后台定时整表替换
+CREATE TABLE IF NOT EXISTS directory (
+    open_id  TEXT PRIMARY KEY,
+    name     TEXT NOT NULL,
+    en_name  TEXT NOT NULL DEFAULT '',
+    email    TEXT NOT NULL DEFAULT '',
+    dept_ids TEXT NOT NULL DEFAULT '[]',
+    name_key TEXT NOT NULL,
+    en_key   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS directory_name ON directory(name_key);
+CREATE INDEX IF NOT EXISTS directory_en ON directory(en_key);
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+
+def name_key(name: str) -> str:
+    """姓名比对用的键：去掉所有空白、忽略大小写（Zhang San = zhangsan）。"""
+    return re.sub(r"\s+", "", name).casefold()
 
 
 @dataclass
@@ -220,6 +244,52 @@ class Database:
     def clear_user_depts(self, open_id: str) -> None:
         with self.conn() as c:
             c.execute("DELETE FROM user_depts WHERE open_id=?", (open_id,))
+
+    # ---- directory (通讯录快照) ----
+    def replace_directory(self, users: list[DirUser], synced_at: int) -> None:
+        with self.conn() as c:
+            c.execute("DELETE FROM directory")
+            c.executemany(
+                "INSERT INTO directory(open_id, name, en_name, email, dept_ids, name_key, en_key) VALUES(?,?,?,?,?,?,?)",
+                [(u.open_id, u.name, u.en_name, u.email, json.dumps(list(u.dept_ids)), name_key(u.name), name_key(u.en_name)) for u in users],
+            )
+            c.execute(
+                "INSERT INTO meta(key, value) VALUES('directory_synced_at', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(synced_at),),
+            )
+
+    def directory_synced_at(self) -> int | None:
+        with self.conn() as c:
+            row = c.execute("SELECT value FROM meta WHERE key='directory_synced_at'").fetchone()
+        return int(row["value"]) if row else None
+
+    @staticmethod
+    def _dir_user(row: sqlite3.Row) -> DirUser:
+        return DirUser(row["open_id"], row["name"], row["en_name"], row["email"], tuple(json.loads(row["dept_ids"])))
+
+    def directory_lookup(self, name: str) -> list[DirUser]:
+        """姓名或英文名完全匹配（忽略空白和大小写）。"""
+        key = name_key(name)
+        with self.conn() as c:
+            rows = c.execute("SELECT * FROM directory WHERE name_key=? OR en_key=? ORDER BY name, email", (key, key)).fetchall()
+        return [self._dir_user(r) for r in rows]
+
+    def directory_search(self, query: str, limit: int = 20) -> list[DirUser]:
+        """姓名/英文名/邮箱包含关键字；完全匹配排在前面。"""
+        key = name_key(query)
+        like = "%" + key.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with self.conn() as c:
+            rows = c.execute(
+                "SELECT * FROM directory WHERE name_key LIKE ? ESCAPE '\\' OR en_key LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\' "
+                "ORDER BY (name_key=? OR en_key=?) DESC, name, email LIMIT ?",
+                (like, like, like, key, key, limit),
+            ).fetchall()
+        return [self._dir_user(r) for r in rows]
+
+    def directory_get(self, open_id: str) -> DirUser | None:
+        with self.conn() as c:
+            row = c.execute("SELECT * FROM directory WHERE open_id=?", (open_id,)).fetchone()
+        return self._dir_user(row) if row else None
 
     # ---- api tokens ----
     def add_token(self, token_hash: str, owner: str, label: str) -> None:

@@ -121,6 +121,43 @@ def test_list_departments_pages_and_skips_deleted(tmp_path):
     assert [(d.id, d.name, d.parent_id) for d in depts] == [("od-a", "技术中心", "0"), ("od-b", "运维部", "od-a")]
 
 
+def test_list_department_users(tmp_path):
+    pages = {
+        None: {"has_more": True, "page_token": "p2", "items": [
+            {"open_id": "ou_1", "name": "张三", "en_name": "Zhang San", "enterprise_email": "ZS@corp.com", "email": "zs@gmail.com",
+             "department_ids": ["od-a"], "status": {"is_resigned": False}},
+            {"open_id": "ou_2", "name": "离职的人", "department_ids": ["od-a"], "status": {"is_resigned": True}},
+        ]},
+        "p2": {"has_more": False, "items": [{"open_id": "ou_3", "name": "李四", "department_ids": ["od-a", "od-b"]}]},
+    }
+
+    def handler(req: httpx.Request):
+        if req.url.path.endswith("/tenant_access_token/internal"):
+            return _tenant_ok(req)
+        assert req.url.path == "/open-apis/contact/v3/users/find_by_department"
+        assert req.url.params["department_id"] == "od-a"
+        assert req.url.params["user_id_type"] == "open_id"
+        return httpx.Response(200, json={"code": 0, "data": pages[req.url.params.get("page_token")]})
+
+    users = make_client(tmp_path, handler).list_department_users("od-a")
+    assert [(u.open_id, u.name, u.en_name, u.email, u.dept_ids) for u in users] == [
+        ("ou_1", "张三", "Zhang San", "zs@corp.com", ("od-a",)),  # 企业邮箱优先，转小写
+        ("ou_3", "李四", "", "", ("od-a", "od-b")),
+    ]
+
+
+def test_list_department_users_requires_name(tmp_path):
+    # 真实飞书：没开 contact:user.base:readonly 时成员里没有 name
+    def handler(req: httpx.Request):
+        if req.url.path.endswith("/tenant_access_token/internal"):
+            return _tenant_ok(req)
+        items = [{"open_id": "ou_1", "union_id": "on_1", "department_ids": ["od-a"]}]
+        return httpx.Response(200, json={"code": 0, "data": {"has_more": False, "items": items}})
+
+    with pytest.raises(FeishuError, match="contact:user.base:readonly"):
+        make_client(tmp_path, handler).list_department_users("od-a")
+
+
 def test_list_departments_requires_parent_field(tmp_path):
     # 真实飞书：没开 contact:department.organize:readonly 时，部门里没有 parent_department_id
     def handler(req: httpx.Request):

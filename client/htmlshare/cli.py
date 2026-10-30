@@ -120,6 +120,25 @@ def cmd_share(args) -> int:
     return 0
 
 
+def cmd_whois(args) -> int:
+    res = make_client().search_users(args.query)
+    if args.json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0
+    users = res.get("users", [])
+    if not users:
+        print(f"通讯录里没找到“{args.query}”（通讯录同步于 {_when(res.get('synced_at'))}）")
+        return 0
+    for u in users:
+        name = u["name"] + (f" ({u['en_name']})" if u.get("en_name") else "")
+        print(f"{name}  {u.get('email') or '（无邮箱）'}  {u['open_id']}")
+        if u.get("departments"):
+            print(f"    {'；'.join(u['departments'])}")
+    if len(users) > 1:
+        print("重名时用邮箱或 open_id 指定可见人。")
+    return 0
+
+
 def cmd_rm(args) -> int:
     make_client().delete(args.name)
     print(f"已删除：{args.name}")
@@ -157,8 +176,8 @@ def build_parser() -> argparse.ArgumentParser:
         "-t",
         "--to",
         type=_list_arg,
-        help="可见人，逗号分隔：飞书邮箱、手机号、dept:部门名（含子部门，同名时写完整路径如 dept:技术中心/运维部）或 all（全员）。"
-        "不填：新页面仅自己可见，已有页面保留原权限",
+        help="可见人，逗号分隔：姓名、飞书邮箱、手机号、dept:部门名（含子部门，同名时写完整路径如 dept:技术中心/运维部）"
+        "或 all（全员）。重名时先用 htmlshare whois 查邮箱。不填：新页面仅自己可见，已有页面保留原权限",
     )
     sp.add_argument("-e", "--expires", type=int, help="多少天后过期，0 表示永不过期；默认由服务端决定（通常 30 天）")
     sp.add_argument("--json", action="store_true", help="输出 JSON")
@@ -176,6 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-e", "--expires", type=int, help="从现在起多少天后过期，0 表示永不过期")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_share)
+
+    sp = sub.add_parser("whois", help="按姓名/英文名/邮箱查同事（看部门、邮箱，处理重名）")
+    sp.add_argument("query", help="姓名、英文名或邮箱的一部分")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_whois)
 
     sp = sub.add_parser("rm", help="删除页面")
     sp.add_argument("name")

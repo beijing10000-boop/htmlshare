@@ -31,7 +31,8 @@ AI 工具 ──(CLI / MCP)──▶ htmlshare 客户端 ──HTTPS + 个人 To
    - `contact:department.base:readonly`：获取部门基础信息（按部门名授权）
    - `contact:department.organize:readonly`：获取部门组织架构信息（上级部门，用于"含子部门"和完整路径）
    - `contact:user.department:readonly`：获取用户组织架构信息（判断访问者属于哪些部门）
-   - `contact:user.email:readonly`：获取用户邮箱（可选，只用于页面上显示）
+   - `contact:user.base:readonly`：获取用户基本信息（按姓名查人：同步通讯录时拿姓名、英文名、在职状态）
+   - `contact:user.email:readonly`：获取用户邮箱（建议开：重名时靠邮箱区分；也用于页面上显示）
    - 具体名称以后台显示为准；缺哪个权限，接口报错里会直接给出申请链接
 5. **通讯录权限范围**（数据权限）设为「全部成员」，否则范围外的人查不到。
 6. **版本管理与发布**：可用范围选全员（或需要的部门），提交发布，等管理员审批。
@@ -76,8 +77,9 @@ htmlshare login --server https://share.example.com
 ```markdown
 ## 分享 HTML
 生成 HTML 报告或页面后，如果用户想分享给同事或要一个链接，用 htmlshare 发布：
-    htmlshare publish <文件绝对路径> --name <英文短名> --to <飞书邮箱,dept:部门名,... | all>
-- 可见人用飞书邮箱、手机号或 dept:部门名（含子部门），all 表示全员；用户没说给谁看就先问，不要擅自用 all。
+    htmlshare publish <文件绝对路径> --name <英文短名> --to <姓名,飞书邮箱,dept:部门名,... | all>
+- 可见人可以直接写姓名，也可以用飞书邮箱、手机号或 dept:部门名（含子部门），all 表示全员；用户没说给谁看就先问，不要擅自用 all。
+- 提示"有 N 个人叫 xx"时，从列出的部门/邮箱里判断是谁并改用邮箱；判断不了就问用户。查人：htmlshare whois <姓名>
 - 提示"同名部门"时，用提示里的完整路径重试（如 dept:技术中心/运维部）。
 - 输出里有"注意：以下可见人没有加上"时，要把原因告诉用户。
 - 修改可见人：htmlshare share <名字> --add a@x.com --remove b@x.com；查看我的页面：htmlshare ls
@@ -100,6 +102,7 @@ MCP 提供的工具：
 | --- | --- |
 | `publish_html` | 发布：`file_path`（绝对路径）或 `html_content` 二选一，`name`、`viewers`、`expires_days` |
 | `update_viewers` | 修改可见人：`add` / `remove` / `set_to`，也可改 `expires_days` |
+| `find_user` | 按姓名/英文名/邮箱查同事（部门、邮箱、open_id），处理重名 |
 | `list_my_pages` | 列出我发布的页面 |
 | `delete_page` | 删除页面 |
 | `whoami` | 当前登录身份 |
@@ -109,6 +112,8 @@ MCP 提供的工具：
 ```bash
 htmlshare publish report.html --name q3-report --to a@corp.com,13800000000 --expires 30
 htmlshare publish report.html --name ops-weekly --to "dept:技术中心/运维部,dept:研发部"
+htmlshare publish report.html --name review --to "张三,Li Si"     # 按姓名（中文名或英文名）
+htmlshare whois 张三                                               # 重名时查部门和邮箱
 htmlshare publish report.html --name q3-report          # 覆盖更新内容，可见人不变
 htmlshare share q3-report --add c@corp.com --remove a@corp.com
 htmlshare share q3-report --set all                      # 改成全员可见
@@ -120,7 +125,12 @@ htmlshare whoami / logout
 
 ## 权限规则
 
-- 可见人：飞书邮箱、手机号、`dept:部门名`、`all`（任何本企业登录用户），也可以直接填 open_id（`ou_...`）。
+- 可见人：姓名、飞书邮箱、手机号、`dept:部门名`、`all`（任何本企业登录用户），也可以直接填 open_id（`ou_...`）。
+- 姓名：中文名或英文名完全匹配（忽略空格和大小写，`Zhang San` = `zhangsan`），也可以写成 `name:张三`。
+  重名时不会随便挑一个，而是在 `unresolved` 里列出每个人的部门、邮箱和 open_id，改用邮箱或 open_id 即可。
+  姓名来自后台同步的通讯录快照：服务启动时（快照过期的话）同步一次，之后每 6 小时一次，全量约几十秒；
+  查不到人时会提前触发一次同步（最多每 30 分钟一次），所以新入职的同事稍等一会儿或直接用邮箱。
+  离职、未加入的人不会出现在通讯录里。
 - 部门：`dept:运维部` 或 `部门:运维部`，**包含所有子部门**。有同名部门时会提示候选路径，
   改写成完整路径或路径后缀即可（`dept:技术中心/运维部`）；也可以直接填 `dept:od-xxxx`（open_department_id）。
   访问者的所属部门缓存 1 小时，部门树缓存 10 分钟；调岗后重新登录立即生效。
@@ -139,6 +149,8 @@ htmlshare whoami / logout
 - 登录 Cookie：HttpOnly、SameSite=Lax、https 下加 Secure；OAuth 带 state 校验；`next` 参数只允许站内路径。
 - API 只认 Bearer token（数据库只存 sha256），不认 Cookie；CLI 登录采用设备码流程，需要用户在浏览器里核对代码并确认。
 - 访问记录写在 `access_log` 表（谁、什么时候、是否放行）。
+- 通讯录搜索接口（`/api/users/search`、`find_user`、`whois`）需要登录 token，只返回在职员工的姓名、英文名、部门、邮箱、open_id，
+  不返回手机号——和员工在飞书里本来就能看到的范围一致。
 
 ## 本地开发
 
@@ -153,8 +165,8 @@ HTMLSHARE_PUBLIC_URL=http://localhost:8780 HTMLSHARE_DEV_FAKE_LOGIN=1 HTMLSHARE_
 
 ## 后续计划
 
-- ~~按部门授权~~（0.2.0 已完成）
-- 按飞书群授权、按姓名查人（AI 往往只知道名字）
+- ~~按部门授权~~（0.2.0 已完成）、~~按姓名查人~~（0.3.0 已完成）
+- 按飞书群授权
 - 发布后用飞书机器人通知可见人
 - 网页端管理（改可见人、删页面、Token 列表与撤销）
 - 多文件页面（zip：HTML + 图片/JS）

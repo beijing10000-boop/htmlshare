@@ -44,6 +44,9 @@ class DeptDirectory:
     def __contains__(self, dept_id: str) -> bool:
         return dept_id in self._by_id
 
+    def ids(self) -> list[str]:
+        return list(self._by_id)
+
     def chain(self, dept_id: str) -> list[str]:
         """部门自己 + 全部上级（不含根）。"""
         out = []

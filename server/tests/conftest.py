@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from htmlshare_server.app import create_app, hash_secret
 from htmlshare_server.config import Settings
-from htmlshare_server.feishu import Dept, FakeFeishu
+from htmlshare_server.feishu import Dept, DirUser, FakeFeishu
 
 DIRECTORY = {
     "alice@example.com": "ou_alice",
@@ -34,6 +34,15 @@ MEMBERSHIPS = {
     "ou_carol": ["od-sales"],
     "ou_dave": ["od-rd", "od-sales-team"],
 }
+# 通讯录：bob 和 carol 重名"张三"；dave 在两个部门；erin 在根部门、没有邮箱
+PEOPLE = [
+    DirUser("ou_alice", "爱丽丝", "Alice Wang", "alice@example.com", ("od-ops",)),
+    DirUser("ou_bob", "张三", "Zhang San", "bob@example.com", ("od-ops-1",)),
+    DirUser("ou_carol", "张三", "Zhang San", "carol@example.com", ("od-sales",)),
+    DirUser("ou_dave", "戴维", "Dave Smith", "dave@example.com", ("od-rd",)),
+    DirUser("ou_dave", "戴维", "Dave Smith", "dave@example.com", ("od-sales-team",)),
+    DirUser("ou_erin", "艾琳", "", "", ()),
+]
 
 
 def make_settings(tmp_path: Path, **kw) -> Settings:
@@ -51,9 +60,10 @@ def make_settings(tmp_path: Path, **kw) -> Settings:
 class Env:
     def __init__(self, tmp_path: Path, feishu=None, **kw):
         self.settings = make_settings(tmp_path, **kw)
-        self.feishu = feishu or FakeFeishu(DIRECTORY, DEPARTMENTS, MEMBERSHIPS)
+        self.feishu = feishu or FakeFeishu(DIRECTORY, DEPARTMENTS, MEMBERSHIPS, PEOPLE)
         self.app = create_app(self.settings, feishu=self.feishu)
         self.db = self.app.state.db
+        self.user_dir = self.app.state.user_dir
 
     def browser(self, email: str | None = None) -> TestClient:
         c = TestClient(self.app, follow_redirects=False)
