@@ -92,8 +92,11 @@ Windows 10 以上和 macOS 自带）。这和 S3 / R2 预签名 URL 是同一个
 | `update_viewers` | 修改可见人：`add` / `remove` / `set_to`，也可改 `expires_days` |
 | `find_user` | 按姓名/英文名/邮箱查同事（部门、邮箱、open_id），处理重名 |
 | `list_my_pages` | 列出我发布的页面 |
+| `list_shared_with_me` | 列出别人分享给我、我能打开的页面 |
 | `delete_page` | 删除页面 |
 | `whoami` | 当前凭证对应的身份 |
+
+分享站首页也会同时列出「我发布的页面」和「分享给我的页面」（标明是直接分享、全员可见还是通过哪个部门）。
 
 凭证在分享站首页「我的接入凭证」里可以看到最近使用时间、随时撤销。
 

@@ -53,7 +53,34 @@ def message(title: str, text: str, status: int = 200, user_name: str | None = No
     return layout(title, f'<div class="card"><h2>{escape(title)}</h2><p>{text}</p></div>', status, user_name)
 
 
-def home(user_name: str, public_url: str, pages: list[dict], install_cmd: str, tokens: list[dict]) -> HTMLResponse:
+def shared_table(shared: list[dict], dept_error: str | None) -> str:
+    note = f'<p class="warn">{escape(dept_error)}</p>' if dept_error else ""
+    if not shared:
+        return note + '<p class="muted">还没有人分享页面给你。</p>'
+    rows = "".join(
+        f'<tr><td><a href="/{escape(p["name"])}.html" target="_blank">{escape(p["title"] or p["name"])}</a>'
+        f'<div class="muted">{escape(p["name"])}</div></td><td>{escape(p["owner_name"] or "—")}</td>'
+        f'<td><span class="tag">{escape(p["via"])}</span></td>'
+        f'<td>{escape(fmt_ts(p["updated_ts"]))}</td><td>{escape(fmt_ts(p["expires_ts"]))}</td></tr>'
+        for p in shared
+    )
+    return (
+        note
+        + '<div class="wrap"><table><tr><th>页面</th><th>发布者</th><th>你能看到是因为</th><th>更新时间</th><th>过期时间</th></tr>'
+        + rows
+        + "</table></div>"
+    )
+
+
+def home(
+    user_name: str,
+    public_url: str,
+    pages: list[dict],
+    install_cmd: str,
+    tokens: list[dict],
+    shared: list[dict],
+    dept_error: str | None = None,
+) -> HTMLResponse:
     if pages:
         rows = []
         for p in pages:
@@ -69,7 +96,7 @@ def home(user_name: str, public_url: str, pages: list[dict], install_cmd: str, t
             + "</table></div>"
         )
     else:
-        table = '<p class="muted">还没有分享过页面。</p>'
+        table = '<p class="muted">还没有发布过页面。</p>'
     if tokens:
         token_rows = "".join(
             f'<tr><td>{escape(t["label"] or "（未命名）")}</td><td>{escape(fmt_ts(t["created_at"]))}</td>'
@@ -90,7 +117,8 @@ def home(user_name: str, public_url: str, pages: list[dict], install_cmd: str, t
 <p class="muted">接好以后直接对 AI 说「把这个报告发布出去，给张三和技术中心看」就行。
 可见人可以说姓名、飞书邮箱、手机号、部门（含子部门）或全员。</p>
 </div>
-<div class="card"><h2>我分享的页面</h2>{table}</div>
+<div class="card"><h2>我发布的页面</h2>{table}</div>
+<div class="card"><h2>分享给我的页面</h2>{shared_table(shared, dept_error)}</div>
 <div class="card" id="tokens"><h2>我的接入凭证</h2>
 <p class="muted">每次「接入 AI 工具」或命令行登录都会生成一个凭证。凭证等同于你的身份；不用的、或者可能泄露的，在这里撤销。</p>
 {token_table}</div>

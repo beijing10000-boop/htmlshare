@@ -171,6 +171,16 @@ def build_remote_mcp(service: PageService, db: Database, s: Settings) -> tuple[B
         return {"pages": [brief(p) for p in pages]}
 
     @server.tool()
+    async def list_shared_with_me(ctx: Context) -> dict:
+        """列出别人分享给我、我能打开的页面（直接分享给我的、全员可见的、授权给我所在部门的），含链接、发布者、更新时间。"""
+        res = await run(service.shared_with, owner_of(ctx))
+        keep = ("url", "name", "title", "owner_name", "via", "updated_at", "expires_at")
+        out = {"pages": [{k: p[k] for k in keep} for p in res["pages"]]}
+        if res["dept_error"]:
+            out["note"] = res["dept_error"]
+        return out
+
+    @server.tool()
     async def delete_page(ctx: Context, name: str) -> dict:
         """删除我发布的一个页面，删除后链接立即失效。"""
         return await run(service.delete, owner_of(ctx), name)

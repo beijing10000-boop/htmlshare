@@ -31,6 +31,8 @@ NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 TITLE_RE = re.compile(rb"<title[^>]*>(.*?)</title>", re.I | re.S)
 META_CHARSET_RE = re.compile(rb"<meta[^>]+charset\s*=\s*[\"']?([A-Za-z0-9_-]+)", re.I)
 UPLOAD_TTL = 1800  # 一次性上传地址 30 分钟有效
+USER_DEPT_TTL = 3600  # 用户所属部门缓存 1 小时（重新登录会立即刷新）
+VIA_TEXT = {"user": "直接分享给你", "all": "全员可见"}
 
 
 def hash_secret(value: str) -> str:
@@ -86,6 +88,14 @@ class PageService:
     def page_path(self, name: str) -> Path:
         return self.pages_dir / f"{name}.html"
 
+    def display_name(self, open_id: str) -> str:
+        """登录过的用户用登录时的名字；只用过凭证、没在浏览器登录过的，用通讯录里的姓名。"""
+        name = self.db.user_name(open_id)
+        if not name:
+            u = self.users.get(open_id)
+            name = u.name if u else ""
+        return name
+
     def page_json(self, p: Page, acl: list[AclEntry] | None = None) -> dict:
         acl = self.db.get_acl(p.name) if acl is None else acl
         return {
@@ -94,7 +104,7 @@ class PageService:
             "title": p.title,
             "size": p.size,
             "owner": p.owner,
-            "owner_name": self.db.user_name(p.owner),
+            "owner_name": self.display_name(p.owner),
             "viewers": [e.as_dict() for e in acl],
             "created_at": iso(p.created_at),
             "updated_at": iso(p.updated_at),
@@ -284,6 +294,47 @@ class PageService:
 
     def get_page(self, owner: str, name: str) -> dict:
         return self.page_json(self.owned_page(name, owner))
+
+    def user_dept_chain(self, open_id: str) -> set[str]:
+        """用户直属部门 + 全部上级。直属部门缓存 USER_DEPT_TTL，部门树按 DeptDirectory 的 TTL 缓存。失败抛 FeishuError。"""
+        direct = self.db.cached_user_depts(open_id, USER_DEPT_TTL)
+        if direct is None:
+            direct = self.feishu.user_department_ids(open_id)
+            self.db.save_user_depts(open_id, direct)
+        self.depts.refresh()
+        if any(d not in self.depts for d in direct):
+            self.depts.refresh(force=True)  # 新建的部门，缓存里还没有
+        out: set[str] = set()
+        for d in direct:
+            out.update(self.depts.chain(d))
+        return out
+
+    def shared_with(self, open_id: str) -> dict:
+        """别人分享给我、我能打开的页面。判断规则和打开页面时完全一致（个人 / 全员 / 我所在部门及其上级）。"""
+        chain: set[str] = set()
+        dept_error = None
+        if self.db.has_dept_acl():  # 没有按部门授权的页面就不用查飞书
+            try:
+                chain = self.user_dept_chain(open_id)
+            except FeishuError as e:
+                log.warning("查询 %s 所属部门失败: %s", open_id, e)
+                dept_error = "查询你所在的部门时飞书接口出错，按部门授权给你的页面暂时没有列出来，稍后刷新重试"
+        pages = []
+        for p, via in self.db.pages_shared_with(open_id, chain, int(time.time())):
+            pages.append(
+                {
+                    "name": p.name,
+                    "url": f"{self.s.public_url}/{p.name}.html",
+                    "title": p.title,
+                    "owner_name": self.display_name(p.owner),
+                    "via": VIA_TEXT.get(via.kind, via.label),
+                    "updated_at": iso(p.updated_at),
+                    "expires_at": iso(p.expires_at),
+                    "updated_ts": p.updated_at,
+                    "expires_ts": p.expires_at,
+                }
+            )
+        return {"pages": pages, "dept_error": dept_error}
 
     def delete(self, owner: str, name: str) -> dict:
         page = self.owned_page(name, owner)

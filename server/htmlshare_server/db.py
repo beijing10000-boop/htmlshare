@@ -230,6 +230,32 @@ class Database:
             ).fetchone()
         return row is not None
 
+    def has_dept_acl(self) -> bool:
+        with self.conn() as c:
+            return c.execute("SELECT 1 FROM acl WHERE kind='dept' LIMIT 1").fetchone() is not None
+
+    def pages_shared_with(self, open_id: str, dept_ids: set[str], now: int, limit: int = 200) -> list[tuple[Page, AclEntry]]:
+        """别人发布、我能打开的未过期页面 -> (页面, 命中的那条授权)。一个页面命中多条时按 个人 > 部门 > 全员 取一条。"""
+        marks = ",".join("?" * len(dept_ids)) or "NULL"
+        with self.conn() as c:
+            rows = c.execute(
+                f"SELECT p.*, a.kind AS acl_kind, a.value AS acl_value, a.label AS acl_label "
+                f"FROM pages p JOIN acl a ON a.page = p.name "
+                f"WHERE p.owner <> ? AND (p.expires_at IS NULL OR p.expires_at > ?) "
+                f"AND ((a.kind='user' AND a.value=?) OR a.kind='all' OR (a.kind='dept' AND a.value IN ({marks}))) "
+                f"ORDER BY p.updated_at DESC, p.name",
+                (open_id, now, open_id, *sorted(dept_ids)),
+            ).fetchall()
+        rank = {"user": 0, "dept": 1, "all": 2}
+        best: dict[str, tuple[Page, AclEntry]] = {}
+        for r in rows:
+            d = dict(r)
+            entry = AclEntry(d.pop("acl_kind"), d.pop("acl_value"), d.pop("acl_label"))
+            name = d["name"]
+            if name not in best or rank[entry.kind] < rank[best[name][1].kind]:
+                best[name] = (Page(**d), entry)
+        return list(best.values())[:limit]
+
     def acl_dept_ids(self, page: str) -> set[str]:
         with self.conn() as c:
             rows = c.execute("SELECT value FROM acl WHERE page=? AND kind='dept'", (page,)).fetchall()
