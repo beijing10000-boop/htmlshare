@@ -59,11 +59,15 @@ class UserDirectory:
         return self.db.directory_get(open_id)
 
     def dept_paths(self, user: DirUser) -> list[str]:
+        try:
+            self.depts.refresh()  # 部门树没加载时 path() 只能给出 id；已缓存时这一步几乎没开销
+        except FeishuError:
+            pass
         return [self.depts.path(d) for d in user.dept_ids if d != ROOT]
 
-    def describe(self, user: DirUser) -> str:
-        """张三（技术中心/运维部，zhangsan@x.com，ou_xxx），给重名提示用。"""
-        bits = [*self.dept_paths(user)[:2], user.email, user.open_id]
+    def describe(self, user: DirUser, with_id: bool = True) -> str:
+        """张三（技术中心/运维部，zhangsan@x.com，ou_xxx），给重名提示用；给人看的按钮不带 open_id。"""
+        bits = [*self.dept_paths(user)[:2], user.email, user.open_id if with_id else ""]
         return f"{user.name}（{'，'.join(b for b in bits if b)}）"
 
     # ---- 同步 ----
