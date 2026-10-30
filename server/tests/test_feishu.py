@@ -126,7 +126,7 @@ def test_list_departments_requires_parent_field(tmp_path):
     def handler(req: httpx.Request):
         if req.url.path.endswith("/tenant_access_token/internal"):
             return _tenant_ok(req)
-        items = [{"open_department_id": "od-a", "department_id": "a", "name": "IT基础运维安全部", "status": {"is_deleted": False}}]
+        items = [{"open_department_id": "od-a", "department_id": "a", "name": "运维部", "status": {"is_deleted": False}}]
         return httpx.Response(200, json={"code": 0, "data": {"has_more": False, "items": items}})
 
     with pytest.raises(FeishuError, match="contact:department.organize:readonly"):
