@@ -73,8 +73,9 @@ def home(user_name: str, public_url: str, pages: list[dict], install_cmd: str) -
 <pre>{escape(install_cmd)}
 htmlshare login --server {escape(public_url)}</pre>
 <p>2. 命令行发布：</p>
-<pre>htmlshare publish report.html --name q3-report --to zhangsan@example.com,dept:技术中心/运维部</pre>
-<p class="muted">可见人可以填飞书邮箱、手机号、dept:部门名（含子部门，同名部门写完整路径）或 all（全员）。</p>
+<pre>htmlshare publish report.html --name q3-report --to 张三,lisi@example.com,dept:技术中心/运维部</pre>
+<p class="muted">可见人可以填姓名、飞书邮箱、手机号、dept:部门名（含子部门，同名部门写完整路径）或 all（全员）。
+重名时用 <code>htmlshare whois 张三</code> 查邮箱再指定。</p>
 <p>3. 或者把它接成 MCP（Claude Code 示例）：</p>
 <pre>claude mcp add htmlshare -- htmlshare mcp</pre>
 <p class="muted">没法打开浏览器的环境（比如远程服务器），可以在这里生成一个 API Token，设成环境变量 HTMLSHARE_TOKEN 和 HTMLSHARE_SERVER。</p>

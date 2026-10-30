@@ -36,6 +36,15 @@ class Dept:
     parent_id: str  # 顶级部门的 parent 是 "0"（根）
 
 
+@dataclass(frozen=True)
+class DirUser:
+    open_id: str
+    name: str
+    en_name: str = ""
+    email: str = ""
+    dept_ids: tuple[str, ...] = ()
+
+
 def _json(resp: httpx.Response, what: str) -> dict:
     try:
         body = resp.json()
@@ -174,6 +183,31 @@ class FeishuClient:
             raise FeishuError("获取用户所属部门失败：返回里没有 department_ids，请确认应用已开通 contact:user.department:readonly")
         return list(user["department_ids"] or [])
 
+    def list_department_users(self, dept_id: str) -> list[DirUser]:
+        """部门的直属成员（不含子部门），跳过已离职/未加入的人。dept_id="0" 是根部门。"""
+        out: list[DirUser] = []
+        params = {"department_id": dept_id, "department_id_type": "open_department_id", "user_id_type": "open_id", "page_size": 50}
+        while True:
+            data = self._get("/open-apis/contact/v3/users/find_by_department", params, "获取部门成员")
+            for it in data.get("items") or []:
+                if "name" not in it:
+                    raise FeishuError("获取部门成员失败：返回里没有 name，请确认应用已开通 contact:user.base:readonly")
+                st = it.get("status") or {}
+                if st.get("is_resigned") or st.get("is_unjoin"):
+                    continue
+                out.append(
+                    DirUser(
+                        open_id=it["open_id"],
+                        name=it.get("name") or "",
+                        en_name=it.get("en_name") or "",
+                        email=(it.get("enterprise_email") or it.get("email") or "").lower(),
+                        dept_ids=tuple(it.get("department_ids") or ()),
+                    )
+                )
+            if not data.get("has_more") or not data.get("page_token"):
+                return out
+            params["page_token"] = data["page_token"]
+
 
 DEV_DEPARTMENTS = [
     Dept("od-dev-tech", "技术中心", "0"),
@@ -183,6 +217,13 @@ DEV_DEPARTMENTS = [
 ]
 # 开发模式下按登录邮箱的前缀分部门，方便手工试：ops-xx@ → 运维部，rd-xx@ → 研发部，sales-xx@ → 销售部
 DEV_EMAIL_PREFIX_DEPT = {"ops": "od-dev-ops", "rd": "od-dev-rd", "sales": "od-dev-sales"}
+# 开发模式通讯录（姓名, 英文名, 邮箱）；故意有两个张三，用来试重名。open_id 与用这个邮箱开发登录时一致
+DEV_PEOPLE = [
+    ("张三", "Zhang San", "ops-zhangsan@example.com"),
+    ("张三", "Zhang San", "sales-zhangsan@example.com"),
+    ("李四", "Li Si", "rd-lisi@example.com"),
+    ("王五", "Wang Wu", "sales-wangwu@example.com"),
+]
 
 
 class FakeFeishu:
@@ -196,14 +237,22 @@ class FakeFeishu:
         directory: dict[str, str] | None = None,
         departments: list[Dept] | None = None,
         memberships: dict[str, list[str]] | None = None,
+        people: list[DirUser] | None = None,
     ):
         # directory 给测试用：只认这些邮箱/手机号；None 表示全部能查到
         self.directory = directory
         self.departments = DEV_DEPARTMENTS if departments is None else departments
         # memberships: open_id -> 直属部门；None 表示按登录邮箱前缀分配
         self.memberships = memberships
+        # people: 通讯录（按姓名查人用）；None 表示用 DEV_PEOPLE
+        if people is None:
+            people = [
+                DirUser(self.open_id_for(email), name, en, email, (DEV_EMAIL_PREFIX_DEPT[email.split("-")[0]],))
+                for name, en, email in DEV_PEOPLE
+            ]
+        self.people = people
         self._emails: dict[str, str] = {}
-        self.calls: dict[str, int] = {"list_departments": 0, "user_department_ids": 0}
+        self.calls: dict[str, int] = {"list_departments": 0, "user_department_ids": 0, "list_department_users": 0}
 
     @staticmethod
     def open_id_for(key: str) -> str:
@@ -224,6 +273,10 @@ class FakeFeishu:
     def list_departments(self) -> list[Dept]:
         self.calls["list_departments"] += 1
         return list(self.departments)
+
+    def list_department_users(self, dept_id: str) -> list[DirUser]:
+        self.calls["list_department_users"] += 1
+        return [p for p in self.people if dept_id in p.dept_ids or (dept_id == "0" and not p.dept_ids)]
 
     def user_department_ids(self, open_id: str) -> list[str]:
         self.calls["user_department_ids"] += 1

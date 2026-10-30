@@ -1,5 +1,19 @@
 # 更新记录
 
+## 0.3.0
+
+- 按姓名查人：可见人可以直接写姓名（中文名或英文名，忽略空格大小写），也可写 `name:张三`；
+  重名时在 `unresolved` 里列出每个人的部门、邮箱、open_id，不会随便挑一个。
+- 通讯录快照：后台线程按部门并发拉取成员（4 线程，失败重试；同步失败不覆盖旧快照），
+  启动时快照过期就同步，之后每 6 小时一次；查不到人时提前同步（最多每 30 分钟一次）。
+- 新接口 `GET /api/users/search?q=`，客户端新增 `htmlshare whois` 命令和 MCP `find_user` 工具。
+- 用邮箱/open_id 加的可见人，若通讯录里有此人，显示成"张三 <zhangsan@x.com>"；移除可见人支持写姓名。
+- 可见人列表里英文名可以带空格（`John Smith`）；"a@x.com b@x.com" 仍按空格拆开。
+- schema v3：新增 `directory`、`meta` 表（自动创建）。
+
+升级：飞书应用新增 `contact:user.base:readonly`（必需）和 `contact:user.email:readonly`（建议）并发布新版本；
+服务器上 `git pull && docker compose up -d --build`，启动后约 1 分钟完成首次通讯录同步（看日志"通讯录同步完成"）。
+
 ## 0.2.0
 
 - 按部门授权：可见人支持 `dept:部门名` / `部门:部门名`，包含所有子部门；同名部门提示候选路径，

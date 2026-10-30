@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ from .acl import remove_viewers, resolve_viewers, split_viewers
 from .config import Settings
 from .db import AclEntry, Database, Page
 from .depts import DeptDirectory
+from .directory import UserDirectory
 from .feishu import FakeFeishu, FeishuClient, FeishuError
 
 log = logging.getLogger("htmlshare")
@@ -139,12 +141,20 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
     pages_dir.mkdir(parents=True, exist_ok=True)
     fs = feishu or (FakeFeishu() if s.dev_fake_login else FeishuClient(s))
     dept_dir = DeptDirectory(fs, ttl=DEPT_TREE_TTL)
+    user_dir = UserDirectory(fs, dept_dir, db, interval=s.directory_sync_hours * 3600)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        if s.directory_sync:
+            user_dir.start()  # 后台线程；快照过期（或从没同步过）时立即同步一次
+        yield
     signer = URLSafeTimedSerializer(s.secret_key, salt="htmlshare-session")
     max_bytes = s.max_upload_mb * 1024 * 1024
 
-    app = FastAPI(title="htmlshare", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="htmlshare", version=__version__, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.settings = s
     app.state.db = db
+    app.state.user_dir = user_dir
 
     # ---------- helpers ----------
     def page_path(name: str) -> Path:
@@ -216,7 +226,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
 
     def resolve_or_502(items: list[str]):
         try:
-            return resolve_viewers(items, fs, dept_dir)
+            return resolve_viewers(items, fs, dept_dir, user_dir)
         except FeishuError as e:
             raise HTTPException(502, str(e)) from None
 
@@ -444,6 +454,26 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         db.revoke_token(hash_secret(request.headers["authorization"][7:].strip()))
         return {"ok": True}
 
+    @app.get("/api/users/search")
+    def api_user_search(q: str, owner: str = Depends(require_token)):
+        """按姓名/英文名/邮箱关键字查同事，给 AI 在重名时挑人用。只返回在职员工的姓名、部门、邮箱、open_id。"""
+        q = q.strip()
+        if not q:
+            raise HTTPException(400, "请提供搜索关键字")
+        synced = user_dir.synced_at()
+        if synced is None:
+            raise HTTPException(503, "通讯录还在同步（服务启动后约 1 分钟），请稍后重试")
+        users = user_dir.search(q)
+        if not users:
+            user_dir.kick()
+        return {
+            "synced_at": iso(synced),
+            "users": [
+                {"open_id": u.open_id, "name": u.name, "en_name": u.en_name, "email": u.email, "departments": user_dir.dept_paths(u)}
+                for u in users
+            ],
+        }
+
     @app.post("/api/pages")
     def api_publish(
         owner: str = Depends(require_token),
@@ -534,7 +564,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
                 acl += [e for e in resolved.entries if (e.kind, e.value) not in have]
                 unresolved += resolved.unresolved
             if body.remove_viewers:
-                acl = remove_viewers(acl, split_viewers(body.remove_viewers))
+                acl = remove_viewers(acl, split_viewers(body.remove_viewers), user_dir)
             db.replace_acl(page.name, acl)
         if body.expires_days is not None:
             page.expires_at = expiry_from_days(body.expires_days, int(time.time()))

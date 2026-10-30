@@ -129,3 +129,6 @@ class Client:
 
     def delete(self, name: str) -> dict:
         return self._request("DELETE", f"/api/pages/{name}")
+
+    def search_users(self, query: str) -> dict:
+        return self._request("GET", "/api/users/search", params={"q": query})

@@ -20,6 +20,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.delenv("HTMLSHARE_SERVER", raising=False)
     monkeypatch.delenv("HTMLSHARE_TOKEN", raising=False)
     env = Env(tmp_path / "srv")
+    env.user_dir.sync()  # 测试里不跑后台线程，手动同步一次通讯录
     env.api("ou_alice")  # 生成 TOKEN
     http = TestClient(env.app)
     env.client = Client(server="http://testserver", token=TOKEN, http=http)
@@ -54,7 +55,7 @@ def test_cli_publish_ls_share_rm(env, report, capsys):
 
     assert cli.main(["share", "q3-report", "--add", "carol@example.com", "--remove", "bob@example.com", "--json"]) == 0
     page = json.loads(capsys.readouterr().out)
-    assert [v["label"] for v in page["viewers"]] == ["carol@example.com"]
+    assert [v["label"] for v in page["viewers"]] == ["张三 <carol@example.com>"]  # 通讯录里有，带上姓名
 
     assert cli.main(["share", "q3-report", "--set", ""]) == 0
     assert "仅自己" in capsys.readouterr().out
@@ -73,6 +74,28 @@ def test_cli_publish_to_department(env, report, capsys):
 
     res = mcp_server.update_viewers("ops", remove=["dept:Sales Team"])
     assert res["viewers"] == ["部门:技术中心/运维部"]
+
+
+def test_whois_and_publish_by_name(env, report, capsys):
+    assert cli.main(["whois", "张三"]) == 0
+    out = capsys.readouterr().out
+    assert "张三 (Zhang San)  bob@example.com  ou_bob" in out
+    assert "技术中心/运维部/一组" in out
+    assert "重名时用邮箱或 open_id 指定可见人" in out
+
+    assert cli.main(["publish", str(report), "--name", "byname", "--to", "戴维,张三"]) == 0
+    out = capsys.readouterr().out
+    assert "可见人：戴维 <dave@example.com>" in out
+    assert "张三：有 2 个人叫“张三”" in out
+
+    assert cli.main(["whois", "没有这个人"]) == 0
+    assert "通讯录里没找到" in capsys.readouterr().out
+
+
+def test_mcp_find_user(env):
+    res = mcp_server.find_user("dave")
+    assert [(u["name"], u["email"]) for u in res["users"]] == [("戴维", "dave@example.com")]
+    assert res["users"][0]["departments"] == ["技术中心/研发部", "销售部/Sales Team"]
 
 
 def test_cli_error_exit_code(env, tmp_path, report, capsys):
@@ -122,14 +145,14 @@ def test_env_overrides_config(tmp_path, monkeypatch):
 def test_mcp_tools(env, report):
     res = mcp_server.publish_html(file_path=str(report), name="rpt", viewers=["bob@example.com"])
     assert res["url"] == "http://testserver/rpt.html"
-    assert res["viewers"] == ["bob@example.com"]
+    assert res["viewers"] == ["张三 <bob@example.com>"]
     assert res["created"] is True and res["unresolved"] == []
 
     res = mcp_server.publish_html(html_content="<title>inline</title>hi", name="inline", viewers=["all"])
     assert res["viewers"] == ["全员"] and res["title"] == "inline"
 
     res = mcp_server.update_viewers("rpt", add=["carol@example.com"], remove=["bob@example.com"])
-    assert res["viewers"] == ["carol@example.com"]
+    assert res["viewers"] == ["张三 <carol@example.com>"]
 
     names = {p["name"] for p in mcp_server.list_my_pages()}
     assert names == {"rpt", "inline"}

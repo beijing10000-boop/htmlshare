@@ -91,7 +91,8 @@ def test_unresolved_viewers(env):
     r = publish(env.api("ou_alice"), "p1", viewers="bob@example.com,nobody@example.com,dept:不存在的部门,张三")
     body = r.json()
     assert [v["value"] for v in body["viewers"]] == ["ou_bob"]
-    assert [u["input"] for u in body["unresolved"]] == ["张三", "nobody@example.com", "dept:不存在的部门"]
+    assert [u["input"] for u in body["unresolved"]] == ["nobody@example.com", "dept:不存在的部门", "张三"]
+    assert "通讯录还在同步" in body["unresolved"][2]["reason"]  # 测试里没跑同步
 
 
 def test_overwrite_keeps_acl_and_blocks_others(env):

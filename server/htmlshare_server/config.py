@@ -46,6 +46,8 @@ class Settings:
     max_upload_mb: int = 20
     page_csp: str = DEFAULT_PAGE_CSP
     client_dist: Path = Path("/app/client-dist")
+    directory_sync: bool = True
+    directory_sync_hours: int = 6
     dev_fake_login: bool = False
 
     @property
@@ -89,5 +91,7 @@ class Settings:
             max_upload_mb=_int("HTMLSHARE_MAX_UPLOAD_MB", 20),
             page_csp=os.environ.get("HTMLSHARE_PAGE_CSP", DEFAULT_PAGE_CSP),
             client_dist=Path(os.environ.get("HTMLSHARE_CLIENT_DIST", "/app/client-dist")),
+            directory_sync=_bool("HTMLSHARE_DIRECTORY_SYNC", True),
+            directory_sync_hours=_int("HTMLSHARE_DIRECTORY_SYNC_HOURS", 6),
             dev_fake_login=dev,
         )
