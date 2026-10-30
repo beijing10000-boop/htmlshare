@@ -1,6 +1,6 @@
 [project]
 name = "htmlshare-server"
-version = "0.3.0"
+version = "0.4.0"
 description = "内网 HTML 分享服务：飞书登录 + 按人授权访问"
 requires-python = ">=3.10"
 dependencies = [
@@ -9,6 +9,7 @@ dependencies = [
     "httpx>=0.27",
     "itsdangerous>=2.1",
     "python-multipart>=0.0.9",
+    "mcp>=2.3",
 ]
 
 [project.optional-dependencies]

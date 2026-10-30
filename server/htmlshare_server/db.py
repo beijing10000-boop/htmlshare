@@ -13,7 +13,7 @@ from typing import Iterator
 
 from .feishu import DirUser
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -85,6 +85,16 @@ CREATE INDEX IF NOT EXISTS directory_en ON directory(en_key);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+-- v4：一次性上传地址（远程 MCP：AI 先拿地址，再用 curl 把本地文件传上来）
+CREATE TABLE IF NOT EXISTS upload_tickets (
+    ticket_hash  TEXT PRIMARY KEY,
+    owner        TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    acl          TEXT,                       -- JSON；NULL 表示按发布规则（新页面仅自己、已有页面保留原名单）
+    unresolved   TEXT NOT NULL DEFAULT '[]',
+    expires_days INTEGER,
+    expires_at   INTEGER NOT NULL
 );
 """
 
@@ -312,6 +322,63 @@ class Database:
     def revoke_token(self, token_hash: str) -> None:
         with self.conn() as c:
             c.execute("DELETE FROM api_tokens WHERE token_hash=?", (token_hash,))
+
+    def list_tokens(self, owner: str) -> list[sqlite3.Row]:
+        with self.conn() as c:
+            return c.execute(
+                "SELECT rowid AS id, label, created_at, last_used_at FROM api_tokens WHERE owner=? ORDER BY created_at DESC",
+                (owner,),
+            ).fetchall()
+
+    def revoke_token_id(self, owner: str, token_id: int) -> bool:
+        with self.conn() as c:
+            return c.execute("DELETE FROM api_tokens WHERE rowid=? AND owner=?", (token_id, owner)).rowcount == 1
+
+    # ---- upload tickets ----
+    def add_upload_ticket(
+        self,
+        ticket_hash: str,
+        owner: str,
+        name: str,
+        acl: list[AclEntry] | None,
+        unresolved: list[dict],
+        expires_days: int | None,
+        expires_at: int,
+    ) -> None:
+        with self.conn() as c:
+            c.execute("DELETE FROM upload_tickets WHERE expires_at <= ?", (int(time.time()),))
+            c.execute(
+                "INSERT INTO upload_tickets(ticket_hash, owner, name, acl, unresolved, expires_days, expires_at) VALUES(?,?,?,?,?,?,?)",
+                (
+                    ticket_hash,
+                    owner,
+                    name,
+                    None if acl is None else json.dumps([e.as_dict() for e in acl], ensure_ascii=False),
+                    json.dumps(unresolved, ensure_ascii=False),
+                    expires_days,
+                    expires_at,
+                ),
+            )
+
+    def get_upload_ticket(self, ticket_hash: str) -> dict | None:
+        with self.conn() as c:
+            row = c.execute(
+                "SELECT * FROM upload_tickets WHERE ticket_hash=? AND expires_at > ?", (ticket_hash, int(time.time()))
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "owner": row["owner"],
+            "name": row["name"],
+            "acl": None if row["acl"] is None else [AclEntry(**e) for e in json.loads(row["acl"])],
+            "unresolved": json.loads(row["unresolved"]),
+            "expires_days": row["expires_days"],
+        }
+
+    def take_upload_ticket(self, ticket_hash: str) -> bool:
+        """作废上传地址；只有一个请求能成功（防止同一地址被用两次）。"""
+        with self.conn() as c:
+            return c.execute("DELETE FROM upload_tickets WHERE ticket_hash=?", (ticket_hash,)).rowcount == 1
 
     # ---- cli device login ----
     def add_cli_login(self, device_hash: str, user_code: str, expires_at: int) -> None:

@@ -23,6 +23,10 @@ code,pre{font-family:ui-monospace,Consolas,monospace;font-size:13px}
 pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
 button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 18px;font-size:15px;cursor:pointer}
 .code{font-size:28px;letter-spacing:4px;font-weight:600}.warn{color:var(--warn)}
+button.secondary{background:transparent;color:var(--accent);border:1px solid var(--line);padding:4px 12px;font-size:14px}
+form.inline{display:inline;margin:0}
+textarea{width:100%;font-family:ui-monospace,Consolas,monospace;font-size:13px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:12px;resize:vertical}
+details summary{cursor:pointer}
 .tag{display:inline-block;border:1px solid var(--line);border-radius:4px;padding:0 6px;margin:0 4px 4px 0;font-size:12px}
 """
 
@@ -49,7 +53,7 @@ def message(title: str, text: str, status: int = 200, user_name: str | None = No
     return layout(title, f'<div class="card"><h2>{escape(title)}</h2><p>{text}</p></div>', status, user_name)
 
 
-def home(user_name: str, public_url: str, pages: list[dict], install_cmd: str) -> HTMLResponse:
+def home(user_name: str, public_url: str, pages: list[dict], install_cmd: str, tokens: list[dict]) -> HTMLResponse:
     if pages:
         rows = []
         for p in pages:
@@ -66,22 +70,60 @@ def home(user_name: str, public_url: str, pages: list[dict], install_cmd: str) -
         )
     else:
         table = '<p class="muted">还没有分享过页面。</p>'
+    if tokens:
+        token_rows = "".join(
+            f'<tr><td>{escape(t["label"] or "（未命名）")}</td><td>{escape(fmt_ts(t["created_at"]))}</td>'
+            f'<td>{escape(fmt_ts(t["last_used_at"], never="从未使用"))}</td>'
+            f'<td><form method="post" action="/me/tokens/{int(t["id"])}/revoke" class="inline">'
+            f'<button type="submit" class="secondary">撤销</button></form></td></tr>'
+            for t in tokens
+        )
+        token_table = (
+            '<div class="wrap"><table><tr><th>名称</th><th>创建时间</th><th>最近使用</th><th></th></tr>' + token_rows + "</table></div>"
+        )
+    else:
+        token_table = '<p class="muted">还没有。</p>'
     body = f"""
+<div class="card"><h2>接入 AI 工具</h2>
+<p>不用安装任何软件：点下面的按钮，把生成的一段话复制发给你的 AI 工具（Claude Code、Cursor 等），它会自己完成配置。</p>
+<form method="post" action="/me/connect"><button type="submit">接入 AI 工具</button></form>
+<p class="muted">接好以后直接对 AI 说「把这个报告发布出去，给张三和 IT研发中心看」就行。
+可见人可以说姓名、飞书邮箱、手机号、部门（含子部门）或全员。</p>
+</div>
 <div class="card"><h2>我分享的页面</h2>{table}</div>
-<div class="card"><h2>在 AI 工具里使用</h2>
-<p>1. 安装客户端并登录（会打开浏览器走飞书登录）：</p>
+<div class="card" id="tokens"><h2>我的接入凭证</h2>
+<p class="muted">每次「接入 AI 工具」或命令行登录都会生成一个凭证。凭证等同于你的身份；不用的、或者可能泄露的，在这里撤销。</p>
+{token_table}</div>
+<div class="card"><details><summary><b>命令行客户端（可选）</b>：Claude Desktop 等不支持远程 MCP 的工具用</summary>
+<p>需要 Python 3.10+：</p>
 <pre>{escape(install_cmd)}
-htmlshare login --server {escape(public_url)}</pre>
-<p>2. 命令行发布：</p>
-<pre>htmlshare publish report.html --name q3-report --to 张三,lisi@example.com,dept:技术中心/运维部</pre>
-<p class="muted">可见人可以填姓名、飞书邮箱、手机号、dept:部门名（含子部门，同名部门写完整路径）或 all（全员）。
-重名时用 <code>htmlshare whois 张三</code> 查邮箱再指定。</p>
-<p>3. 或者把它接成 MCP（Claude Code 示例）：</p>
-<pre>claude mcp add htmlshare -- htmlshare mcp</pre>
-<p class="muted">没法打开浏览器的环境（比如远程服务器），可以在这里生成一个 API Token，设成环境变量 HTMLSHARE_TOKEN 和 HTMLSHARE_SERVER。</p>
-<form method="post" action="/me/tokens"><button type="submit">生成 API Token</button></form>
-</div>"""
+htmlshare login --server {escape(public_url)}
+claude mcp add --scope user htmlshare -- htmlshare mcp</pre>
+<p class="muted">没法打开浏览器的环境（比如远程服务器），可以生成一个凭证，设成环境变量 HTMLSHARE_TOKEN 和 HTMLSHARE_SERVER。</p>
+<form method="post" action="/me/tokens"><button type="submit" class="secondary">生成命令行凭证</button></form>
+</details></div>"""
     return layout("HTML 分享", body, user_name=user_name)
+
+
+def connect(user_name: str, prompt: str) -> HTMLResponse:
+    body = f"""<div class="card"><h2>接入 AI 工具</h2>
+<p>把下面这段话<b>完整复制</b>，发给你的 AI 工具（Claude Code、Cursor 等），它会自己完成配置并确认接通。</p>
+<textarea id="prompt" readonly rows="16">{escape(prompt)}</textarea>
+<p><button id="copy" type="button">复制这段话</button> <span id="copied" class="muted"></span></p>
+<p class="warn">这段话里含有你的接入凭证，只显示这一次。它等同于你的身份：不要发到群里或发给别人。
+不用了可以在首页「我的接入凭证」里撤销。</p>
+<p class="muted">Claude Desktop 等不支持远程 MCP 的工具，请用首页「命令行客户端」的方式。</p>
+<p><a href="/">返回首页</a></p></div>
+<script>
+document.getElementById("copy").onclick = function () {{
+  var t = document.getElementById("prompt"), tip = document.getElementById("copied"), ok = false;
+  t.focus(); t.select();
+  try {{ ok = document.execCommand("copy"); }} catch (e) {{}}
+  if (!ok && navigator.clipboard) {{ navigator.clipboard.writeText(t.value).then(function () {{ tip.textContent = "已复制"; }}); return; }}
+  tip.textContent = ok ? "已复制" : "复制失败，请手动全选复制";
+}};
+</script>"""
+    return layout("接入 AI 工具", body, user_name=user_name)
 
 
 def forbidden(user_name: str, owner_name: str, page: str) -> HTMLResponse:
