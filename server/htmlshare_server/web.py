@@ -87,7 +87,7 @@ def home(user_name: str, public_url: str, pages: list[dict], install_cmd: str, t
 <div class="card"><h2>接入 AI 工具</h2>
 <p>不用安装任何软件：点下面的按钮，把生成的一段话复制发给你的 AI 工具（Claude Code、Cursor 等），它会自己完成配置。</p>
 <form method="post" action="/me/connect"><button type="submit">接入 AI 工具</button></form>
-<p class="muted">接好以后直接对 AI 说「把这个报告发布出去，给张三和 IT研发中心看」就行。
+<p class="muted">接好以后直接对 AI 说「把这个报告发布出去，给张三和技术中心看」就行。
 可见人可以说姓名、飞书邮箱、手机号、部门（含子部门）或全员。</p>
 </div>
 <div class="card"><h2>我分享的页面</h2>{table}</div>
