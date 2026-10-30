@@ -1,5 +1,11 @@
 # 更新记录
 
+## 0.5.1
+
+- 「接入 AI 工具」生成的说明加上 OpenAI Codex（`~/.codex/config.toml` 的 `url` + `http_headers`，命令行、IDE 插件、
+  ChatGPT 桌面 App 里的 Codex 共用），并让 ChatGPT 网页版收到时直接告诉用户连不上内网、改用 Codex 或 Claude Code
+  （ChatGPT 连接器从 OpenAI 云端访问，要求公网 HTTPS 和 OAuth，不支持固定 Bearer 凭证）。
+
 ## 0.5.0
 
 - 首页新增「分享给我的页面」：列出别人发布、我能打开的页面（直接分享给我 / 全员可见 / 授权给我所在部门及其上级），

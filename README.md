@@ -63,7 +63,7 @@ curl http://<服务器IP>:8080/healthz
 ## 三、接入 AI 工具（免安装，推荐）
 
 1. 浏览器打开分享站，用飞书登录，点 **「接入 AI 工具」**。
-2. 页面会生成一段话（含分享站地址和一个专用凭证），**复制发给你的 AI 工具**（Claude Code、Cursor 等），它会自己完成配置并调用 `whoami` 确认。
+2. 页面会生成一段话（含分享站地址和一个专用凭证），**复制发给你的 AI 工具**（Claude Code、Cursor、Codex 等），它会自己完成配置并调用 `whoami` 确认。
 3. 按 AI 的提示重启工具或新开会话，之后直接说「把这个报告发布出去，给张三和技术中心看」即可。
 
 各工具的配置方式（那段话里已经写好，AI 会照做）：
@@ -77,6 +77,16 @@ claude mcp add --transport http --scope user htmlshare http://<分享站>/mcp --
 // Cursor：~/.cursor/mcp.json
 { "mcpServers": { "htmlshare": { "url": "http://<分享站>/mcp", "headers": { "Authorization": "Bearer <凭证>" } } } }
 ```
+
+```toml
+# OpenAI Codex：~/.codex/config.toml（命令行、IDE 插件、ChatGPT 桌面 App 里的 Codex 共用）
+[mcp_servers.htmlshare]
+url = "http://<分享站>/mcp"
+http_headers = { "Authorization" = "Bearer <凭证>" }
+```
+
+> **ChatGPT 网页版 / 聊天里的连接器**连不上：它从 OpenAI 云端访问 MCP 服务，要求公网 HTTPS，认证只支持 OAuth 或无认证，
+> 不支持固定 Bearer 凭证。要接入只能走 OpenAI 的 Secure MCP Tunnel 并改成 OAuth，目前没做；请用 Codex。
 
 **发布本地文件怎么传上去**：服务端读不到你电脑上的文件，所以分两步——AI 先调 `prepare_upload` 拿到一个
 **30 分钟有效、只能用一次、只能发布到指定页面名**的上传地址，再在终端执行 `curl -T 文件 地址`（Windows PowerShell 里是 `curl.exe`，
