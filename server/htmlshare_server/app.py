@@ -27,6 +27,7 @@ from . import __version__, web
 from .acl import remove_viewers, resolve_viewers, split_viewers
 from .config import Settings
 from .db import AclEntry, Database, Page
+from .depts import DeptDirectory
 from .feishu import FakeFeishu, FeishuClient, FeishuError
 
 log = logging.getLogger("htmlshare")
@@ -52,6 +53,8 @@ USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 SESSION_COOKIE = "hs_session"
 OAUTH_COOKIE = "hs_oauth"
 CLI_LOGIN_TTL = 600
+DEPT_TREE_TTL = 600  # 部门树缓存 10 分钟
+USER_DEPT_TTL = 3600  # 用户所属部门缓存 1 小时（重新登录会立即刷新）
 
 
 @dataclass
@@ -135,6 +138,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
     pages_dir = s.data_dir / "pages"
     pages_dir.mkdir(parents=True, exist_ok=True)
     fs = feishu or (FakeFeishu() if s.dev_fake_login else FeishuClient(s))
+    dept_dir = DeptDirectory(fs, ttl=DEPT_TREE_TTL)
     signer = URLSafeTimedSerializer(s.secret_key, salt="htmlshare-session")
     max_bytes = s.max_upload_mb * 1024 * 1024
 
@@ -212,9 +216,23 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
 
     def resolve_or_502(items: list[str]):
         try:
-            return resolve_viewers(items, fs)
+            return resolve_viewers(items, fs, dept_dir)
         except FeishuError as e:
             raise HTTPException(502, str(e)) from None
+
+    def user_dept_chain(open_id: str) -> set[str]:
+        """用户直属部门 + 全部上级。直属部门缓存 USER_DEPT_TTL，部门树缓存 DEPT_TREE_TTL。"""
+        direct = db.cached_user_depts(open_id, USER_DEPT_TTL)
+        if direct is None:
+            direct = fs.user_department_ids(open_id)
+            db.save_user_depts(open_id, direct)
+        dept_dir.refresh()
+        if any(d not in dept_dir for d in direct):
+            dept_dir.refresh(force=True)  # 新建的部门，缓存里还没有
+        out: set[str] = set()
+        for d in direct:
+            out.update(dept_dir.chain(d))
+        return out
 
     def new_token(owner: str, label: str) -> str:
         token = "hs_" + secrets.token_urlsafe(32)
@@ -264,6 +282,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         if s.allowed_tenant_key and user.tenant_key != s.allowed_tenant_key:
             return web.message("登录失败", "只允许本企业飞书账号访问。", status=403)
         db.upsert_user(user.open_id, user.name, user.email)
+        db.clear_user_depts(user.open_id)  # 重新登录时顺便刷新所属部门（调岗后重登即可生效）
         log.info("登录 %s %s tenant_key=%s", user.open_id, user.name, user.tenant_key)
         resp = RedirectResponse(pending["next"], status_code=302)
         resp.delete_cookie(OAUTH_COOKIE)
@@ -345,6 +364,13 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         if not page or page.expired() or not path.is_file():
             return web.message("页面不存在", "页面不存在或已过期。", status=404, user_name=user.name)
         allowed = page.owner == user.open_id or db.acl_allows(name, user.open_id)
+        if not allowed and (wanted := db.acl_dept_ids(name)):
+            try:
+                allowed = bool(wanted & user_dept_chain(user.open_id))
+            except FeishuError as e:
+                log.warning("查询 %s 所属部门失败: %s", user.open_id, e)
+                db.log_access(name, user.open_id, False)
+                return web.message("暂时无法确认权限", "这个页面按部门授权，但查询你所在的部门时飞书接口出错，请稍后刷新重试。", 503, user.name)
         db.log_access(name, user.open_id, allowed)
         if not allowed:
             return web.forbidden(user.name or user.email, db.user_name(page.owner), name)

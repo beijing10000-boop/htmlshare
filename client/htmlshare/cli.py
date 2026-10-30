@@ -154,7 +154,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("file", help="HTML 文件路径")
     sp.add_argument("-n", "--name", help="页面名（URL 里的名字），默认取文件名；只能用小写字母、数字、-")
     sp.add_argument(
-        "-t", "--to", type=_list_arg, help="可见人，逗号分隔：飞书邮箱、手机号，或 all（全员）。不填：新页面仅自己可见，已有页面保留原权限"
+        "-t",
+        "--to",
+        type=_list_arg,
+        help="可见人，逗号分隔：飞书邮箱、手机号、dept:部门名（含子部门，同名时写完整路径如 dept:技术中心/运维部）或 all（全员）。"
+        "不填：新页面仅自己可见，已有页面保留原权限",
     )
     sp.add_argument("-e", "--expires", type=int, help="多少天后过期，0 表示永不过期；默认由服务端决定（通常 30 天）")
     sp.add_argument("--json", action="store_true", help="输出 JSON")

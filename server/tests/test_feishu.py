@@ -94,3 +94,44 @@ def test_resolve_batches_and_caches_tenant_token(tmp_path):
     assert calls == {"token": 1, "batch": 2}
     fs.resolve(["u1@corp.com"], [])
     assert calls["token"] == 1
+
+
+def _tenant_ok(req):
+    return httpx.Response(200, json={"code": 0, "tenant_access_token": "t-1", "expire": 7200})
+
+
+def test_list_departments_pages_and_skips_deleted(tmp_path):
+    pages = {
+        None: {"has_more": True, "page_token": "p2", "items": [
+            {"open_department_id": "od-a", "name": "技术中心", "parent_department_id": "0"},
+            {"open_department_id": "od-x", "name": "已撤销", "parent_department_id": "0", "status": {"is_deleted": True}},
+        ]},
+        "p2": {"has_more": False, "items": [{"open_department_id": "od-b", "name": "运维部", "parent_department_id": "od-a"}]},
+    }
+
+    def handler(req: httpx.Request):
+        if req.url.path.endswith("/tenant_access_token/internal"):
+            return _tenant_ok(req)
+        assert req.url.path == "/open-apis/contact/v3/departments/0/children"
+        assert req.url.params["fetch_child"] == "true"
+        assert req.url.params["department_id_type"] == "open_department_id"
+        return httpx.Response(200, json={"code": 0, "data": pages[req.url.params.get("page_token")]})
+
+    depts = make_client(tmp_path, handler).list_departments()
+    assert [(d.id, d.name, d.parent_id) for d in depts] == [("od-a", "技术中心", "0"), ("od-b", "运维部", "od-a")]
+
+
+def test_user_department_ids(tmp_path):
+    def handler(req: httpx.Request):
+        if req.url.path.endswith("/tenant_access_token/internal"):
+            return _tenant_ok(req)
+        assert req.url.path == "/open-apis/contact/v3/users/ou_1"
+        assert req.url.params["user_id_type"] == "open_id"
+        user = {"open_id": "ou_1", "department_ids": ["od-a", "od-b"]} if req.headers.get("x-case") != "no-field" else {"open_id": "ou_1"}
+        return httpx.Response(200, json={"code": 0, "data": {"user": user}})
+
+    fs = make_client(tmp_path, handler)
+    assert fs.user_department_ids("ou_1") == ["od-a", "od-b"]
+    fs.http.headers["x-case"] = "no-field"
+    with pytest.raises(FeishuError, match="contact:user.department:readonly"):
+        fs.user_department_ids("ou_1")

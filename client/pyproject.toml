@@ -1,6 +1,6 @@
 [project]
 name = "htmlshare"
-version = "0.1.0"
+version = "0.2.0"
 description = "把 AI 生成的 HTML 发布到内网分享站（CLI + MCP）"
 requires-python = ">=3.10"
 dependencies = [

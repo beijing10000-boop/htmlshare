@@ -29,6 +29,13 @@ class FeishuUser:
     tenant_key: str
 
 
+@dataclass(frozen=True)
+class Dept:
+    id: str  # open_department_id
+    name: str
+    parent_id: str  # 顶级部门的 parent 是 "0"（根）
+
+
 def _json(resp: httpx.Response, what: str) -> dict:
     try:
         body = resp.json()
@@ -126,6 +133,52 @@ class FeishuClient:
                     found[item["mobile"]] = item["user_id"]
         return found
 
+    def _get(self, path: str, params: dict, what: str) -> dict:
+        return _json(
+            self.http.get(
+                f"{self.s.feishu_open_base}{path}",
+                params=params,
+                headers={"Authorization": f"Bearer {self._tenant_access_token()}"},
+            ),
+            what,
+        ).get("data") or {}
+
+    def list_departments(self) -> list[Dept]:
+        """通讯录权限范围内的全部部门（递归子部门）。"""
+        out: list[Dept] = []
+        params = {"department_id_type": "open_department_id", "fetch_child": "true", "page_size": 50}
+        while True:
+            data = self._get("/open-apis/contact/v3/departments/0/children", params, "获取部门列表")
+            for it in data.get("items") or []:
+                if (it.get("status") or {}).get("is_deleted"):
+                    continue
+                out.append(Dept(it["open_department_id"], it.get("name") or "", it.get("parent_department_id") or "0"))
+            if not data.get("has_more") or not data.get("page_token"):
+                return out
+            params["page_token"] = data["page_token"]
+
+    def user_department_ids(self, open_id: str) -> list[str]:
+        """用户直属的部门（不含上级部门）。"""
+        data = self._get(
+            f"/open-apis/contact/v3/users/{open_id}",
+            {"user_id_type": "open_id", "department_id_type": "open_department_id"},
+            "获取用户所属部门",
+        )
+        user = data.get("user") or {}
+        if "department_ids" not in user:
+            raise FeishuError("获取用户所属部门失败：返回里没有 department_ids，请确认应用已开通 contact:user.department:readonly")
+        return list(user["department_ids"] or [])
+
+
+DEV_DEPARTMENTS = [
+    Dept("od-dev-tech", "技术中心", "0"),
+    Dept("od-dev-ops", "运维部", "od-dev-tech"),
+    Dept("od-dev-rd", "研发部", "od-dev-tech"),
+    Dept("od-dev-sales", "销售部", "0"),
+]
+# 开发模式下按登录邮箱的前缀分部门，方便手工试：ops-xx@ → 运维部，rd-xx@ → 研发部，sales-xx@ → 销售部
+DEV_EMAIL_PREFIX_DEPT = {"ops": "od-dev-ops", "rd": "od-dev-rd", "sales": "od-dev-sales"}
+
 
 class FakeFeishu:
     """开发/测试用：不连飞书。登录页让你随便填一个邮箱，任何邮箱都能"查到"。
@@ -133,9 +186,19 @@ class FakeFeishu:
     只在 HTMLSHARE_DEV_FAKE_LOGIN=1 时启用，生产环境绝不能打开。
     """
 
-    def __init__(self, directory: dict[str, str] | None = None):
+    def __init__(
+        self,
+        directory: dict[str, str] | None = None,
+        departments: list[Dept] | None = None,
+        memberships: dict[str, list[str]] | None = None,
+    ):
         # directory 给测试用：只认这些邮箱/手机号；None 表示全部能查到
         self.directory = directory
+        self.departments = DEV_DEPARTMENTS if departments is None else departments
+        # memberships: open_id -> 直属部门；None 表示按登录邮箱前缀分配
+        self.memberships = memberships
+        self._emails: dict[str, str] = {}
+        self.calls: dict[str, int] = {"list_departments": 0, "user_department_ids": 0}
 
     @staticmethod
     def open_id_for(key: str) -> str:
@@ -149,13 +212,21 @@ class FakeFeishu:
         email = email.strip().lower()
         if "@" not in email:
             raise FeishuError("开发登录：请填写邮箱")
-        oid = self.directory.get(email) if self.directory else None
-        return FeishuUser(
-            open_id=oid or self.open_id_for(email),
-            name=name.strip() or email.split("@")[0],
-            email=email,
-            tenant_key="dev",
-        )
+        oid = (self.directory.get(email) if self.directory else None) or self.open_id_for(email)
+        self._emails[oid] = email
+        return FeishuUser(open_id=oid, name=name.strip() or email.split("@")[0], email=email, tenant_key="dev")
+
+    def list_departments(self) -> list[Dept]:
+        self.calls["list_departments"] += 1
+        return list(self.departments)
+
+    def user_department_ids(self, open_id: str) -> list[str]:
+        self.calls["user_department_ids"] += 1
+        if self.memberships is not None:
+            return list(self.memberships.get(open_id, []))
+        prefix = self._emails.get(open_id, "").split("-")[0]
+        dept = DEV_EMAIL_PREFIX_DEPT.get(prefix)
+        return [dept] if dept else []
 
     def resolve(self, emails: list[str], mobiles: list[str]) -> dict[str, str]:
         out = {}
