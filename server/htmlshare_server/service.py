@@ -361,5 +361,28 @@ class PageService:
             ],
         }
 
+    def suggest(self, q: str) -> dict:
+        """网页输入可见人时的联想：同事、部门、全员。value 可以原样作为可见人提交，且唯一确定。"""
+        q = q.strip()
+        items: list[dict] = []
+        if not q:
+            return {"items": items}
+        if self.users.ready():
+            for u in self.users.search(q, limit=8):
+                paths = self.users.dept_paths(u)
+                label = u.name + (f"（{paths[0]}）" if paths else "") + (f" {u.email}" if u.email else "")
+                items.append({"value": u.email or u.open_id, "label": label})
+        try:
+            self.depts.refresh()
+            for d in self.depts.search(q, limit=6):
+                path = self.depts.path(d.id)
+                value = f"dept:{path}" if len(self.depts.find(path)) == 1 else f"dept:{d.id}"
+                items.append({"value": value, "label": f"部门：{path}（含子部门）"})
+        except FeishuError:
+            pass  # 部门联想失败不影响同事联想
+        if "全员".startswith(q) or "所有人".startswith(q) or "all".startswith(q.lower()):
+            items.append({"value": "all", "label": "全员可见"})
+        return {"items": items}
+
     def me(self, owner: str) -> dict:
         return {"open_id": owner, "name": self.db.user_name(owner), "server": self.s.public_url}

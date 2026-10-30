@@ -27,6 +27,17 @@ button.secondary{background:transparent;color:var(--accent);border:1px solid var
 form.inline{display:inline;margin:0}
 textarea{width:100%;font-family:ui-monospace,Consolas,monospace;font-size:13px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:12px;resize:vertical}
 details summary{cursor:pointer}
+h3{font-size:15px;margin:20px 0 8px}
+.ok{color:#2e7d32}
+.notice{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--bg)}
+.notice .cands{margin-top:6px}.notice .cands form{margin:4px 6px 0 0}
+.tag.removable{padding:2px 4px 2px 8px;font-size:13px}
+button.x{background:transparent;color:var(--muted);border:0;padding:0 4px;font-size:14px;line-height:1}
+button.x:hover{color:var(--warn)}
+button.danger{background:var(--warn)}
+form.add-viewer{display:flex;gap:8px;margin-top:10px}
+form.add-viewer input[name=viewers]{flex:1;min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg);font-size:14px}
+select{padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)}
 .tag{display:inline-block;border:1px solid var(--line);border-radius:4px;padding:0 6px;margin:0 4px 4px 0;font-size:12px}
 """
 
@@ -88,10 +99,11 @@ def home(
             rows.append(
                 f'<tr><td><a href="/{escape(p["name"])}.html" target="_blank">{escape(p["name"])}</a>'
                 f'<div class="muted">{escape(p["title"])}</div></td><td>{tags}</td>'
-                f'<td>{p["views"]}</td><td>{escape(fmt_ts(p["updated_ts"]))}</td><td>{escape(fmt_ts(p["expires_ts"]))}</td></tr>'
+                f'<td>{p["views"]}</td><td>{escape(fmt_ts(p["updated_ts"]))}</td><td>{escape(fmt_ts(p["expires_ts"]))}</td>'
+                f'<td><a href="/me/pages/{escape(p["name"])}">设置</a></td></tr>'
             )
         table = (
-            '<div class="wrap"><table><tr><th>页面</th><th>可见人</th><th>访问次数</th><th>更新时间</th><th>过期时间</th></tr>'
+            '<div class="wrap"><table><tr><th>页面</th><th>可见人</th><th>访问次数</th><th>更新时间</th><th>过期时间</th><th></th></tr>'
             + "".join(rows)
             + "</table></div>"
         )
@@ -131,6 +143,100 @@ claude mcp add --scope user htmlshare -- htmlshare mcp</pre>
 <form method="post" action="/me/tokens"><button type="submit" class="secondary">生成命令行凭证</button></form>
 </details></div>"""
     return layout("HTML 分享", body, user_name=user_name)
+
+
+def _fmt_iso(value: str | None) -> str:
+    return value[:16].replace("T", " ") if value else "永不过期"
+
+
+def _action_form(name: str, action: str, label: str, extra: str = "", cls: str = "secondary", confirm: str = "") -> str:
+    onsubmit = f' onsubmit="return confirm(\'{escape(confirm)}\')"' if confirm else ""
+    return (
+        f'<form method="post" action="/me/pages/{escape(name)}" class="inline"{onsubmit}>'
+        f'<input type="hidden" name="action" value="{escape(action)}">{extra}'
+        f'<button type="submit" class="{cls}">{escape(label)}</button></form>'
+    )
+
+
+def page_settings(
+    user_name: str,
+    page: dict,
+    expiry_choices: list[int],
+    notice: str | None = None,
+    unresolved: list[dict] | None = None,
+    error: str | None = None,
+) -> HTMLResponse:
+    name = page["name"]
+    viewers = page["viewers"]
+    if viewers:
+        tags = "".join(
+            f'<span class="tag removable">{escape(v["label"])}'
+            + _action_form(name, "remove", "×", f'<input type="hidden" name="value" value="{escape(v["value"])}">', cls="x")
+            + "</span>"
+            for v in viewers
+        )
+    else:
+        tags = '<span class="muted">仅自己可见</span>'
+    msgs = ""
+    if error:
+        msgs += f'<p class="warn">{escape(error)}</p>'
+    if notice:
+        msgs += f'<p class="ok">{escape(notice)}</p>'
+    for u in unresolved or []:
+        cands = "".join(
+            _action_form(name, "add", f"加上 {c['label']}", f'<input type="hidden" name="viewers" value="{escape(c["value"])}">')
+            for c in u.get("candidates", [])
+        )
+        msgs += f'<div class="notice"><b>{escape(u["input"])}</b>：{escape(u["reason"])}<div class="cands">{cands}</div></div>'
+    options = "".join(f'<option value="{d}">{d} 天后</option>' for d in expiry_choices) + '<option value="0">永不过期</option>'
+    has_all = any(v["kind"] == "all" for v in viewers)
+    quick = ""
+    if not has_all:
+        quick += _action_form(name, "add", "设为全员可见", '<input type="hidden" name="viewers" value="all">')
+    if viewers:
+        quick += " " + _action_form(name, "set_private", "改为仅自己可见", confirm="确定移除全部可见人？之后只有你自己能打开。")
+    body = f"""<div class="card"><h2>页面设置</h2>
+<p><b>{escape(page["title"] or name)}</b> <span class="muted">{escape(name)}</span></p>
+<p><a href="{escape(page["url"])}" target="_blank">{escape(page["url"])}</a></p>
+{msgs}
+<h3>谁能看</h3>
+<div class="viewers">{tags}</div>
+<form method="post" action="/me/pages/{escape(name)}" class="add-viewer">
+<input type="hidden" name="action" value="add">
+<input name="viewers" id="viewer-input" list="viewer-suggest" autocomplete="off" required
+ placeholder="输入姓名、飞书邮箱、手机号或部门，多个用逗号分隔">
+<datalist id="viewer-suggest"></datalist>
+<button type="submit">添加</button></form>
+<p class="muted">发布者本人总是可见。部门包含其所有子部门。输入时会联想同事和部门。</p>
+<p>{quick}</p>
+<h3>过期时间</h3>
+<p>当前：{escape(_fmt_iso(page["expires_at"]))}</p>
+<form method="post" action="/me/pages/{escape(name)}" class="inline">
+<input type="hidden" name="action" value="expiry">
+<select name="days">{options}</select> <button type="submit" class="secondary">修改</button></form>
+<h3>删除</h3>
+<p class="muted">删除后链接立即失效，不能恢复。</p>
+<p>{_action_form(name, "delete", "删除这个页面", cls="danger", confirm="确定删除这个页面？链接会立即失效，不能恢复。")}</p>
+<p><a href="/">返回首页</a></p></div>
+<script>
+(function () {{
+  var input = document.getElementById("viewer-input"), list = document.getElementById("viewer-suggest"), timer;
+  input.addEventListener("input", function () {{
+    clearTimeout(timer);
+    var q = input.value.split(/[,，]/).pop().trim();
+    if (!q) {{ list.innerHTML = ""; return; }}
+    timer = setTimeout(function () {{
+      fetch("/me/suggest?q=" + encodeURIComponent(q)).then(function (r) {{ return r.json(); }}).then(function (d) {{
+        list.innerHTML = "";
+        (d.items || []).forEach(function (it) {{
+          var o = document.createElement("option"); o.value = it.value; o.label = it.label; list.appendChild(o);
+        }});
+      }}).catch(function () {{}});
+    }}, 200);
+  }});
+}})();
+</script>"""
+    return layout(f"页面设置 · {name}", body, user_name=user_name)
 
 
 def connect(user_name: str, prompt: str) -> HTMLResponse:

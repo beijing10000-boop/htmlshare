@@ -252,6 +252,69 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         install = f"pip install {s.public_url}/client/{wheel.name}" if wheel else "pip install <htmlshare 客户端包>"
         return web.home(user.name or user.email, s.public_url, rows, install, tokens, shared["pages"], shared["dept_error"])
 
+    def expiry_choices() -> list[int]:
+        return [d for d in (1, 7, 30, 90, 180, 365) if d <= s.max_expire_days]
+
+    @app.get("/me/pages/{name}")
+    def page_settings_view(name: str, request: Request):
+        user = read_session(request)
+        if not user:
+            return login_redirect(request)
+        try:
+            page = service.get_page(user.open_id, name)
+        except HTTPException as e:
+            return web.message("无法设置这个页面", html.escape(str(e.detail)), status=e.status_code, user_name=user.name)
+        return web.page_settings(user.name or user.email, page, expiry_choices())
+
+    @app.post("/me/pages/{name}")
+    def page_settings_submit(
+        name: str,
+        request: Request,
+        action: str = Form(...),
+        viewers: str = Form(""),
+        value: str = Form(""),
+        days: int | None = Form(None),
+    ):
+        """网页上改可见人 / 过期时间 / 删除；只有发布者本人能改，规则和 API、MCP 完全一样。"""
+        user = read_session(request)
+        if not user:
+            return login_redirect(request)
+        if not origin_ok(request):
+            return web.message("请求被拒绝", "来源校验失败。", status=403)
+        owner = user.open_id
+        notice, unresolved, error = None, [], None
+        try:
+            if action == "add":
+                res = service.update(owner, name, add_viewers=[viewers])
+                unresolved = res["unresolved"]
+                notice = "已更新可见人" if not unresolved else None
+            elif action == "remove":
+                service.update(owner, name, remove_viewers_=[value])
+                notice = "已移除"
+            elif action == "set_private":
+                service.update(owner, name, set_viewers=[])
+                notice = "已改为仅自己可见"
+            elif action == "expiry":
+                service.update(owner, name, expires_days=days if days is not None else -1)
+                notice = "已修改过期时间"
+            elif action == "delete":
+                service.delete(owner, name)
+                return RedirectResponse("/", status_code=303)
+            else:
+                error = "未知操作"
+        except HTTPException as e:
+            if e.status_code in (403, 404):
+                return web.message("无法设置这个页面", html.escape(str(e.detail)), status=e.status_code, user_name=user.name)
+            error = str(e.detail)
+        page = service.get_page(owner, name)
+        return web.page_settings(user.name or user.email, page, expiry_choices(), notice, unresolved, error)
+
+    @app.get("/me/suggest")
+    def suggest(request: Request, q: str = ""):
+        if not read_session(request):
+            raise HTTPException(401, "请先登录")
+        return service.suggest(q)
+
     @app.post("/me/connect")
     def connect_ai(request: Request):
         """生成一个专用 token，并给出一段可以直接复制给 AI 工具的话（AI 自己配置远程 MCP）。"""

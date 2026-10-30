@@ -63,6 +63,14 @@ class DeptDirectory:
         names = [self._by_id[d].name for d in reversed(self.chain(dept_id)) if d in self._by_id]
         return "/".join(names) or dept_id
 
+    def search(self, query: str, limit: int = 10) -> list[Dept]:
+        """部门路径里包含关键字的（给网页输入联想用），路径短的排前面。"""
+        q = query.strip().casefold()
+        if not q:
+            return []
+        hits = [d for d in self._by_id.values() if q in self.path(d.id).casefold()]
+        return sorted(hits, key=lambda d: (len(self.path(d.id)), self.path(d.id)))[:limit]
+
     def find(self, query: str) -> list[Dept]:
         """按 open_department_id、部门名或路径后缀（技术中心/运维部）查找。"""
         q = query.strip().strip("/")

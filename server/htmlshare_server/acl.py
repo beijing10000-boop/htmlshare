@@ -121,7 +121,12 @@ def resolve_viewers(items: list[str], feishu, depts=None, directory=None) -> Res
             else:
                 paths = "、".join(depts.path(d.id) for d in hits[:5])
                 res.unresolved.append(
-                    {"input": item, "reason": f"有 {len(hits)} 个同名部门：{paths}；请写完整路径，例如 dept:{depts.path(hits[0].id)}"}
+                    {
+                        "input": item,
+                        "reason": f"有 {len(hits)} 个同名部门：{paths}；请写完整路径，例如 dept:{depts.path(hits[0].id)}",
+                        # value 可以原样作为可见人再提交一次
+                        "candidates": [{"value": f"dept:{d.id}", "label": DEPT_LABEL_PREFIX + depts.path(d.id)} for d in hits[:10]],
+                    }
                 )
 
     if name_queries:
@@ -144,7 +149,11 @@ def resolve_viewers(items: list[str], feishu, depts=None, directory=None) -> Res
                 else:
                     cands = "；".join(directory.describe(u) for u in hits[:5])
                     res.unresolved.append(
-                        {"input": item, "reason": f"有 {len(hits)} 个人叫“{q}”：{cands}。请改用邮箱或 open_id 指定是哪一位"}
+                        {
+                            "input": item,
+                            "reason": f"有 {len(hits)} 个人叫“{q}”：{cands}。请改用邮箱或 open_id 指定是哪一位",
+                            "candidates": [{"value": u.open_id, "label": directory.describe(u, with_id=False)} for u in hits[:10]],
+                        }
                     )
 
     seen: set[tuple[str, str]] = set()
