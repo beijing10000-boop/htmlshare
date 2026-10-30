@@ -11,6 +11,7 @@
 - 数据库 schema 升到 v2（新增 `user_depts` 表，启动时自动创建，无需手工迁移）。
 
 升级：飞书应用需新增权限 `contact:contact.base:readonly`、`contact:department.base:readonly`、
+`contact:department.organize:readonly`（缺它拿不到上级部门，服务端会明确报错而不是当成顶级部门）、
 `contact:user.department:readonly` 并发布新版本；服务器上 `git pull && docker compose up -d --build`。
 客户端新版：`pip install <分享站>/client/htmlshare-0.2.0-py3-none-any.whl`（0.1.0 客户端也能用，只是帮助文字里没有部门写法）。
 

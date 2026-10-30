@@ -121,6 +121,18 @@ def test_list_departments_pages_and_skips_deleted(tmp_path):
     assert [(d.id, d.name, d.parent_id) for d in depts] == [("od-a", "技术中心", "0"), ("od-b", "运维部", "od-a")]
 
 
+def test_list_departments_requires_parent_field(tmp_path):
+    # 真实飞书：没开 contact:department.organize:readonly 时，部门里没有 parent_department_id
+    def handler(req: httpx.Request):
+        if req.url.path.endswith("/tenant_access_token/internal"):
+            return _tenant_ok(req)
+        items = [{"open_department_id": "od-a", "department_id": "a", "name": "IT基础运维安全部", "status": {"is_deleted": False}}]
+        return httpx.Response(200, json={"code": 0, "data": {"has_more": False, "items": items}})
+
+    with pytest.raises(FeishuError, match="contact:department.organize:readonly"):
+        make_client(tmp_path, handler).list_departments()
+
+
 def test_user_department_ids(tmp_path):
     def handler(req: httpx.Request):
         if req.url.path.endswith("/tenant_access_token/internal"):

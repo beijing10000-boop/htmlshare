@@ -29,6 +29,7 @@ AI 工具 ──(CLI / MCP)──▶ htmlshare 客户端 ──HTTPS + 个人 To
    - `contact:user.id:readonly`：通过手机号或邮箱获取用户 ID（发布时把邮箱换成 open_id，必需）
    - `contact:contact.base:readonly`：获取通讯录基本信息（按部门授权用，调用部门/用户接口的前提）
    - `contact:department.base:readonly`：获取部门基础信息（按部门名授权）
+   - `contact:department.organize:readonly`：获取部门组织架构信息（上级部门，用于"含子部门"和完整路径）
    - `contact:user.department:readonly`：获取用户组织架构信息（判断访问者属于哪些部门）
    - `contact:user.email:readonly`：获取用户邮箱（可选，只用于页面上显示）
    - 具体名称以后台显示为准；缺哪个权限，接口报错里会直接给出申请链接

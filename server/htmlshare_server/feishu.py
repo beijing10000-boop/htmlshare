@@ -152,7 +152,12 @@ class FeishuClient:
             for it in data.get("items") or []:
                 if (it.get("status") or {}).get("is_deleted"):
                     continue
-                out.append(Dept(it["open_department_id"], it.get("name") or "", it.get("parent_department_id") or "0"))
+                # 上级部门字段要单独授权；缺了就没法算"含子部门"，宁可报错也不能静默当成顶级部门
+                if "parent_department_id" not in it:
+                    raise FeishuError(
+                        "获取部门列表失败：返回里没有 parent_department_id，请确认应用已开通 contact:department.organize:readonly"
+                    )
+                out.append(Dept(it["open_department_id"], it.get("name") or "", it["parent_department_id"] or "0"))
             if not data.get("has_more") or not data.get("page_token"):
                 return out
             params["page_token"] = data["page_token"]
