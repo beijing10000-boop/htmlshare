@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import html
 import logging
 import re
 import secrets
@@ -27,7 +26,7 @@ from starlette.routing import Route
 
 from . import __version__, console, web
 from .config import Settings
-from .console import Viewer, safe_next
+from .console import Viewer
 from .db import Database
 from .depts import DeptDirectory
 from .directory import UserDirectory
@@ -56,7 +55,6 @@ SESSION_COOKIE = "hs_session"
 OAUTH_COOKIE = "hs_oauth"
 CLI_LOGIN_TTL = 600
 DEPT_TREE_TTL = 600  # 部门树缓存 10 分钟
-LOGIN_LINK = ("使用飞书账号登录", "/auth/login")
 
 
 class PageUpdate(BaseModel):
@@ -134,9 +132,9 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
             return None
         return Viewer(open_id=data["oid"], name=data.get("name", ""), email=data.get("email", ""))
 
-    def login_redirect(request: Request) -> RedirectResponse:
-        target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
-        return RedirectResponse(f"/auth/login?next={quote(target, safe='')}", status_code=302)
+    def need_login(request: Request) -> Response:
+        """没登录：就在被访问的地址上显示登录页（和运维控制台一样，不直接跳飞书），登录后回到这个地址。"""
+        return web.login_page(request.url.path + (f"?{request.url.query}" if request.url.query else ""))
 
     def origin_ok(request: Request) -> bool:
         origin = request.headers.get("origin")
@@ -170,7 +168,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         resp = RedirectResponse(fs.authorize_url(s.callback_url, state), status_code=302)
         resp.set_cookie(
             OAUTH_COOKIE,
-            signer.dumps({"state": state, "next": safe_next(next)}),
+            signer.dumps({"state": state, "next": web.safe_next(next)}),
             max_age=600,
             httponly=True,
             secure=s.cookie_secure,
@@ -180,25 +178,27 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
 
     @app.get("/auth/callback")
     def auth_callback(request: Request, state: str = "", code: str = "", error: str = "", email: str = "", name: str = ""):
-        if error:
-            return web.message("登录未完成", "你取消了飞书授权。", status=400, link=LOGIN_LINK)
+        # 登录没成功都回到登录页，写明原因；再点一次登录还是回到原来要去的地址
         try:
             pending = signer.loads(request.cookies.get(OAUTH_COOKIE, ""), max_age=600)
         except BadSignature:
             pending = None
+        target = pending["next"] if pending else "/"
+        if error:
+            return web.login_page(target, 400, error="登录没有完成：你取消了飞书授权。")
         if not pending or not state or not secrets.compare_digest(pending["state"], state):
-            return web.message("登录已过期", "登录状态校验失败，请重新登录。", status=400, link=LOGIN_LINK)
+            return web.login_page(target, 400, error="登录已过期：登录状态校验失败，请重新登录。")
         if s.dev_fake_login and email:
             code = f"{email}|{name}"
         if not code:
-            return web.message("登录失败", "飞书没有返回授权码。", status=400, link=LOGIN_LINK)
+            return web.login_page(target, 400, error="登录失败：飞书没有返回授权码。")
         try:
             user = fs.login(code, s.callback_url)
         except FeishuError as e:
             log.warning("飞书登录失败: %s", e)
-            return web.message("登录失败", html.escape(str(e)), status=502, link=LOGIN_LINK)
+            return web.login_page(target, 502, error=f"登录失败：{e}")
         if s.allowed_tenant_key and user.tenant_key != s.allowed_tenant_key:
-            return web.message("登录失败", "只允许本企业飞书账号访问。", status=403)
+            return web.login_page(target, 403, error="登录失败：只允许本企业的飞书账号访问。")
         db.upsert_user(user.open_id, user.name, user.email)
         db.clear_user_depts(user.open_id)  # 重新登录时顺便刷新所属部门（调岗后重登即可生效）
         service.audit(user.open_id, "login", via="web")
@@ -217,9 +217,16 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
 
     @app.get("/auth/logout")
     def auth_logout():
-        resp = web.message("已退出", "你已退出登录。", link=LOGIN_LINK)
+        resp = web.login_page("/", 200, notice="你已退出登录。")
         resp.delete_cookie(SESSION_COOKIE)
         return resp
+
+    @app.get("/login")
+    def login(request: Request, next: str | None = None):
+        """登录页的固定地址。已经登录的直接去 next（没给就是概览）。"""
+        if read_session(request):
+            return RedirectResponse(web.safe_next(next), status_code=302)
+        return web.login_page(next, 200)
 
     if s.dev_fake_login:
 
@@ -236,7 +243,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
             service=service,
             user_dir=user_dir,
             read_session=read_session,
-            login_redirect=login_redirect,
+            need_login=need_login,
             origin_ok=origin_ok,
             new_token=new_token,
             client_wheel=client_wheel,
@@ -260,7 +267,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
     def view_page(name: str, request: Request):
         user = read_session(request)
         if not user:
-            return login_redirect(request)
+            return need_login(request)
         name = name.lower()
         page = db.get_page(name) if NAME_RE.match(name) else None
         path = service.page_path(name)
@@ -321,7 +328,7 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
     def cli_verify_page(request: Request, user_code: str = ""):
         user = read_session(request)
         if not user:
-            return login_redirect(request)
+            return need_login(request)
         code = normalize_user_code(user_code)
         if not db.pending_cli_login(code):
             return web.message("授权链接无效", "这个登录请求不存在或已过期，请在终端重新运行 htmlshare login。", 404, user.label)
@@ -330,11 +337,11 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
     @app.post("/cli/verify")
     def cli_verify_submit(request: Request, user_code: str = Form(...)):
         user = read_session(request)
-        if not user:
-            return web.message("登录已过期", "请重新登录后再确认授权。", 401, link=LOGIN_LINK)
+        code = normalize_user_code(user_code)
+        if not user:  # 重新登录后回到这个代码的确认页
+            return web.login_page(f"/cli/verify?user_code={quote(code, safe='')}", 401, error="登录已过期，还没有授权。请重新登录后再确认。")
         if not origin_ok(request):
             return web.message("请求被拒绝", "来源校验失败。", status=403)
-        code = normalize_user_code(user_code)
         token = "hs_" + secrets.token_urlsafe(32)
         if not db.approve_cli_login(code, user.open_id, token):
             return web.message("授权失败", "这个登录请求不存在或已过期，请在终端重新运行 htmlshare login。", 404, user.label)

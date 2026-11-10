@@ -74,12 +74,28 @@ def test_static_assets(env):
     assert env.browser("bob@example.com").get("/static.html").status_code == 200
 
 
-def test_logged_out_pages_redirect_to_login(env):
-    for path in [*CONSOLE_PAGES, "/admin/pages", "/admin/status"]:
+def test_logged_out_pages_show_the_login_page(env):
+    from urllib.parse import quote
+
+    for path in [*CONSOLE_PAGES, "/admin/pages", "/admin/status", "/me/pages/doc"]:
         r = env.browser().get(path)
-        assert r.status_code == 302 and r.headers["location"].startswith("/auth/login?next="), path
-    r = env.browser().get("/auth/logout")
-    assert "已退出" in r.text and 'href="/auth/login"' in r.text
+        assert r.status_code == 401 and "location" not in r.headers, path  # 不直接跳飞书
+        assert "使用飞书账号登录" in r.text and '<aside class="sidebar">' not in r.text, path
+        assert f'href="/auth/login?next={quote(path, safe="")}"' in r.text, path
+        assert "script-src 'self'" in r.headers["content-security-policy"]
+
+
+def test_expired_session_on_a_form_goes_back_to_where_it_came_from(env):
+    publish(env.api("ou_alice"), "doc")
+    form = {"action": "set_private"}
+    # 重新登录后回到提交表单的那个页面（同源的 Referer），不带上一次操作的成功提示
+    r = env.browser().post("/me/pages/doc", data=form, headers={**ORIGIN, "Referer": "http://testserver/me/pages/doc?done=viewers"})
+    assert r.status_code == 401 and "这次操作没有执行" in r.text and 'href="/auth/login?next=%2Fme%2Fpages%2Fdoc"' in r.text
+    r = env.browser().post("/me/pages/doc", data=form, headers={**ORIGIN, "Referer": "http://testserver/audit?scope=all"})
+    assert 'href="/auth/login?next=%2Faudit%3Fscope%3Dall"' in r.text
+    # 别的站点来的 Referer 不认
+    r = env.browser().post("/me/pages/doc", data=form, headers={**ORIGIN, "Referer": "https://evil.com/me/pages/doc"})
+    assert 'href="/auth/login?next=%2F"' in r.text
 
 
 # ---------- 概览与统计 ----------

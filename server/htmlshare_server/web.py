@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader
@@ -114,6 +116,36 @@ def render(template: str, status: int = 200, **ctx) -> HTMLResponse:
     return HTMLResponse(env.get_template(template).render(**ctx), status_code=status, headers=HEADERS)
 
 
-def message(title: str, text: str, status: int = 200, user_name: str | None = None, link: tuple[str, str] | None = None) -> HTMLResponse:
-    """独立的提示页（登录出错、页面不存在、授权成功……）。text 是调用方拼好的 HTML，里面的变量调用方自己转义。"""
-    return render("message.html", status, title=title, text=Markup(text), user_name=user_name, link=link)
+def message(title: str, text: str, status: int = 200, user_name: str | None = None) -> HTMLResponse:
+    """独立的提示页（页面不存在、授权成功、请求被拒绝……）。text 是调用方拼好的 HTML，里面的变量调用方自己转义。"""
+    return render("message.html", status, title=title, text=Markup(text), user_name=user_name)
+
+
+def safe_next(target: str | None) -> str:
+    """登录后、操作后要跳回的地址：只允许站内路径。"""
+    if not target or not target.startswith("/") or target.startswith("//") or "\\" in target:
+        return "/"
+    if any(ord(ch) < 0x20 for ch in target):
+        return "/"
+    return target
+
+
+PAGE_LINK_RE = re.compile(r"^/([a-z0-9][a-z0-9-]*)\.html$")
+
+
+def login_page(next_path: str | None = "/", status: int = 401, error: str | None = None, notice: str | None = None) -> HTMLResponse:
+    """登录页，和运维控制台一样：先看到是哪个站点，点「使用飞书账号登录」才去飞书授权。
+
+    没登录时就在被访问的地址上显示（401，不跳转），登录后回到 next；退出、登录失败、会话过期也回到这一页，
+    原因写在 notice / error 里。next 是分享出来的页面链接时，告诉对方登录后会打开哪个页面。
+    """
+    target = safe_next(next_path)
+    link = PAGE_LINK_RE.match(target.partition("?")[0])
+    return render(
+        "login.html",
+        status,
+        login_url=f"/auth/login?next={quote(target, safe='')}",
+        page=link.group(1) if link else None,
+        error=error,
+        notice=notice,
+    )

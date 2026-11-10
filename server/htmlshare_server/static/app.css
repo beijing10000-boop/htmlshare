@@ -399,3 +399,10 @@ details > p {
     flex-wrap: wrap;
   }
 }
+
+/* 登录页：从分享链接进来时，说明登录后会打开哪个页面 */
+.login-target {
+  margin: 10px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
