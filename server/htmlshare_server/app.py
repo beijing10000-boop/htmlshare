@@ -269,8 +269,8 @@ def create_app(settings: Settings | None = None, feishu=None) -> FastAPI:
         try:
             allowed = service.can_view(page, user.open_id)
         except FeishuError as e:
-            log.warning("查询 %s 所属部门失败: %s", user.open_id, e)
-            db.log_access(name, user.open_id, False)
+            # 没判断出结果：不放行，也不记成"被拒绝"——否则本来有权限的人会出现在发布者的被拒名单里
+            log.warning("查询 %s 所属部门失败，暂时无法确认 %s 的权限: %s", user.open_id, name, e)
             return web.message("暂时无法确认权限", "这个页面按部门授权，但查询你所在的部门时飞书接口出错，请稍后刷新重试。", 503, user.label)
         db.log_access(name, user.open_id, allowed)
         if not allowed:

@@ -97,9 +97,11 @@ CREATE TABLE IF NOT EXISTS upload_tickets (
     expires_at   INTEGER NOT NULL
 );
 -- v5：访问申请。没权限的人在「没有访问权限」页面上申请，发布者在控制台通过或拒绝；
---     同一个人对同一个页面只有一行，被拒绝后可以再申请（回到 pending）
+--     同一个人对同一个页面只有一行，被拒绝后可以再申请（回到 pending）。
+--     AUTOINCREMENT：编号用过就不再用。页面删除时申请跟着删，编号要是能复用，发布者在一个没刷新的
+--     页面上点「通过」，就可能通过了另一个人对另一个页面的申请
 CREATE TABLE IF NOT EXISTS access_requests (
-    id         INTEGER PRIMARY KEY,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
     page       TEXT NOT NULL,
     open_id    TEXT NOT NULL,
     reason     TEXT NOT NULL DEFAULT '',
@@ -530,9 +532,9 @@ class Database:
         now = int(time.time())
         with self.conn() as c:
             c.execute("INSERT INTO access_log(page, open_id, at, allowed) VALUES(?,?,?,?)", (page, open_id, now, int(allowed)))
-            if allowed:  # 打开成功了（比如按部门加进来的），他之前提的申请就不用再等人处理
+            if allowed:  # 打开成功了（比如按部门加进来的），他之前提的申请不管在等处理还是被拒绝过，都算通过
                 c.execute(
-                    "UPDATE access_requests SET status='approved', decided_at=? WHERE page=? AND open_id=? AND status='pending'",
+                    "UPDATE access_requests SET status='approved', decided_at=? WHERE page=? AND open_id=? AND status<>'approved'",
                     (now, page, open_id),
                 )
 
@@ -663,20 +665,27 @@ class Database:
                 (owner,),
             ).fetchone()[0]
 
-    def decide_request(self, request_id: int, status: str) -> bool:
-        """只有还在待处理的才能改；并发点两次只有一次成功。"""
+    def decide_request(self, request_id: int, grant: AclEntry | None) -> bool:
+        """处理一条申请：grant 给了就是通过（把这个人加进名单），None 是拒绝。
+        只有还在待处理的才能改，改状态和加名单在同一个事务里：两个标签页一边通过一边拒绝时只有一个成功，
+        不会出现"状态是拒绝、名单里却有他"；加名单是单行插入，也不会盖掉同时进行的其他名单修改。"""
         with self.conn() as c:
             cur = c.execute(
                 "UPDATE access_requests SET status=?, decided_at=? WHERE id=? AND status='pending'",
-                (status, int(time.time()), request_id),
+                ("approved" if grant else "rejected", int(time.time()), request_id),
             )
-            return cur.rowcount == 1
+            if cur.rowcount != 1:
+                return False
+            if grant:
+                page = c.execute("SELECT page FROM access_requests WHERE id=?", (request_id,)).fetchone()["page"]
+                c.execute("INSERT OR IGNORE INTO acl(page, kind, value, label) VALUES(?,?,?,?)", (page, grant.kind, grant.value, grant.label))
+            return True
 
     def settle_requests(self, page: str, open_ids: set[str] | None) -> int:
-        """这些人已经能看了（名单里加了他，或者他自己打开成功了），待处理的申请直接算通过。None = 所有人。"""
+        """这些人已经在名单里了：他们的申请不管在等处理还是被拒绝过，都算通过。None = 所有人。"""
         if open_ids is not None and not open_ids:
             return 0
-        sql = "UPDATE access_requests SET status='approved', decided_at=? WHERE page=? AND status='pending'"
+        sql = "UPDATE access_requests SET status='approved', decided_at=? WHERE page=? AND status<>'approved'"
         args: list = [int(time.time()), page]
         if open_ids is not None:
             sql += f" AND open_id IN ({','.join('?' * len(open_ids))})"

@@ -180,6 +180,7 @@ def test_web_upload_errors_come_back_as_json(env):
         ({"name": "taken"}, 409, "已被"),
         ({"name": "ok", "days": "9999"}, 400, "过期天数必须在"),
         ({"name": "ok", "days": "abc"}, 400, "过期天数要填数字"),
+        ({"name": "ok", "days": "²"}, 400, "过期天数要填数字"),  # str.isdigit 认它，int() 不认
     ]:
         r = upload(alice, **form)
         assert r.status_code == status and r.json()["ok"] is False and words in r.json()["error"], form
@@ -189,21 +190,52 @@ def test_web_upload_errors_come_back_as_json(env):
     assert r.status_code == 403 and env.db.get_page("ok") is None
 
 
-def test_page_detail_shows_visitors_and_lets_owner_add_blocked_ones(env):
+def visitor_rows(c, page="doc"):
+    """页面设置里的访客表 -> {访客名字: 这一行的 HTML}。"""
+    body = c.get(f"/me/pages/{page}").text.split('id="visitors"')[1].split('id="manage"')[0].split("</thead>")[1]
+    return {re.sub(r"<[^>]+>", " ", row).split()[0]: row for row in body.split("<tr>")[1:]}
+
+
+def test_visitor_list_follows_the_current_viewer_list_not_the_last_visit(env):
     env.user_dir.sync()
-    publish(env.api("ou_alice"), "doc", html="<title>周报</title>", viewers="bob@example.com")
-    alice, bob, carol = (env.browser(f"{n}@example.com") for n in ("alice", "bob", "carol"))
-    bob.get("/doc.html")
-    carol.get("/doc.html")
-    text = alice.get("/me/pages/doc").text
-    visitors = text.split('id="visitors"')[1].split('id="manage"')[0]
-    assert "bob" in visitors and "carol" in visitors and "能打开" in visitors and "被拒绝" in visitors
-    assert 'name="viewers" value="ou_carol"' in visitors and 'name="viewers" value="ou_bob"' not in visitors
-    r = alice.post("/me/pages/doc", data={"action": "add", "viewers": "ou_carol"}, headers=ORIGIN)
-    assert r.status_code == 303
-    assert carol.get("/doc.html").status_code == 200
-    visitors = alice.get("/me/pages/doc").text.split('id="visitors"')[1].split('id="manage"')[0]
-    assert "被拒绝" not in visitors.split("</thead>")[1]  # carol 最近一次成功了，状态变成能打开
+    publish(env.api("ou_alice"), "doc", html="<title>周报</title>", viewers="bob@example.com, dept:研发部")
+    alice, bob, carol, dave = (env.browser(f"{n}@example.com") for n in ("alice", "bob", "carol", "dave"))
+    assert bob.get("/doc.html").status_code == 200  # 名单里有他本人
+    assert dave.get("/doc.html").status_code == 200  # 在研发部
+    assert carol.get("/doc.html").status_code == 403
+    rows = visitor_rows(alice)
+    assert "在名单里" in rows["bob"] and "按部门授权" in rows["dave"] and "被拒绝" in rows["carol"]
+    assert 'name="viewers" value="ou_carol"' in rows["carol"]  # 只有被拒绝的人有「加入可见范围」
+    assert "加入可见范围" not in rows["bob"] and "加入可见范围" not in rows["dave"]
+
+    # 把 carol 加进来：她还没重新打开，上一次访问是被拒绝的，但名单里已经有她了
+    assert alice.post("/me/pages/doc", data={"action": "add", "viewers": "ou_carol"}, headers=ORIGIN).status_code == 303
+    row = visitor_rows(alice)["carol"]
+    assert "在名单里" in row and "被拒绝" not in row and "加入可见范围" not in row
+    people = {p["name"]: p for p in env.api("ou_alice").get("/api/pages/doc/stats").json()["people"]}
+    assert people["carol"] == {**people["carol"], "listed": True, "blocked": False, "denied": 1}
+    assert (people["dave"]["listed"], people["dave"]["blocked"]) == (False, False)
+
+    # 改成仅自己可见：bob 上次是能打开的，但现在不在名单里了，不能还写着能打开
+    alice.post("/me/pages/doc", data={"action": "set_private"}, headers=ORIGIN)
+    rows = visitor_rows(alice)
+    assert "已移出名单" in rows["bob"] and "在名单里" not in rows["bob"]
+    assert bob.get("/doc.html").status_code == 403
+
+
+def test_unknown_permission_is_not_counted_as_denied(tmp_path):
+    from conftest import DEPARTMENTS, DIRECTORY, MEMBERSHIPS, PEOPLE
+    from htmlshare_server.feishu import FakeFeishu, FeishuError
+
+    class Broken(FakeFeishu):
+        def user_department_ids(self, open_id):
+            raise FeishuError("飞书挂了")
+
+    env = Env(tmp_path, feishu=Broken(DIRECTORY, DEPARTMENTS, MEMBERSHIPS, PEOPLE))
+    publish(env.api("ou_alice"), "doc", viewers="dept:研发部")
+    assert env.browser("dave@example.com").get("/doc.html").status_code == 503  # 查不了部门：不放行
+    stats = env.api("ou_alice").get("/api/pages/doc/stats").json()
+    assert stats["denied"] == 0 and stats["people"] == []  # 但也不能把 dave 算成被拒绝的人
 
 
 # ---------- 访问申请 ----------
@@ -247,6 +279,78 @@ def test_access_request_reject_and_ask_again(env):
     ask(carol, "doc", "第二次")
     row = env.db.get_request("doc", "ou_carol")
     assert (row["status"], row["reason"], row["decided_at"]) == ("pending", "第二次", None)
+
+
+def test_reject_then_approve_from_a_stale_tab_does_not_let_the_person_in(env):
+    from htmlshare_server.db import AclEntry
+
+    publish(env.api("ou_alice"), "doc")
+    alice, carol = env.browser("alice@example.com"), env.browser("carol@example.com")
+    ask(carol, "doc")
+    rid = env.db.get_request("doc", "ou_carol")["id"]
+    assert decide(alice, env, "doc", "ou_carol", "reject").headers["location"] == "/requests?done=rejected"
+    # 另一个标签页里还显示着「通过」：状态已经是拒绝，名单不能被动到
+    r = alice.post(f"/requests/{rid}", data={"action": "approve"}, headers=ORIGIN)
+    assert r.headers["location"] == "/requests?done=handled"
+    assert env.db.decide_request(rid, AclEntry("user", "ou_carol", "carol")) is False
+    assert env.db.get_acl("doc") == [] and carol.get("/doc.html").status_code == 403
+    assert env.db.get_request("doc", "ou_carol")["status"] == "rejected"
+
+
+def test_request_numbers_are_never_reused(env):
+    # 页面删除时申请跟着删。编号要是能复用，发布者在没刷新的页面上点「通过」，会通过另一个人对另一个页面的申请
+    alice_api = env.api("ou_alice")
+    publish(alice_api, "p1")
+    publish(alice_api, "salary")
+    alice = env.browser("alice@example.com")
+    ask(env.browser("carol@example.com"), "p1")
+    stale = env.db.get_request("p1", "ou_carol")["id"]  # alice 的页面上显示着这一条
+    alice_api.delete("/api/pages/p1")
+    ask(env.browser("bob@example.com"), "salary")
+    assert env.db.get_request("salary", "ou_bob")["id"] > stale
+    r = alice.post(f"/requests/{stale}", data={"action": "approve"}, headers=ORIGIN)
+    assert r.status_code == 404 and env.db.get_acl("salary") == []
+
+
+def test_requester_does_not_see_the_title_until_let_in(tmp_path):
+    env = Env(tmp_path, notify=True)
+    env.app.state.service.spawn = lambda fn: fn()
+    publish(env.api("ou_alice"), "plan", html="<title>机密标题</title>")
+    alice, carol = env.browser("alice@example.com"), env.browser("carol@example.com")
+    assert "机密标题" not in carol.get("/plan.html").text
+    ask(carol, "plan", "想看")
+    assert "机密标题" in env.feishu.sent[-1][1]  # 发布者收到的通知里有标题，这没问题
+    decide(alice, env, "plan", "ou_carol", "reject")
+    assert env.feishu.sent[-1][0] == "ou_carol" and "机密标题" not in env.feishu.sent[-1][1] and "plan" in env.feishu.sent[-1][1]
+    for path in ("/requests", "/audit", "/", "/plan.html"):
+        assert "机密标题" not in carol.get(path).text, path
+    assert ">plan<" in carol.get("/requests").text  # 只显示页面名
+    ask(carol, "plan")
+    assert "机密标题" not in carol.get("/requests").text  # 等处理的时候也一样
+    decide(alice, env, "plan", "ou_carol", "approve")
+    assert "机密标题" in carol.get("/requests").text and "机密标题" in env.feishu.sent[-1][1]
+    # 之后又被移出名单：标题收回
+    env.api("ou_alice").patch("/api/pages/plan", json={"set_viewers": []})
+    assert "机密标题" not in carol.get("/requests").text
+
+
+def test_rejected_request_turns_approved_once_the_person_is_let_in(env):
+    alice_api = env.api("ou_alice")
+    publish(alice_api, "by-name")
+    publish(alice_api, "by-open")
+    alice, carol = env.browser("alice@example.com"), env.browser("carol@example.com")
+    for page in ("by-name", "by-open"):
+        ask(carol, page)
+        decide(alice, env, page, "ou_carol", "reject")
+    # 拒绝之后发布者改了主意，直接把人加进名单：申请不能还显示「未通过」
+    alice_api.patch("/api/pages/by-name", json={"add_viewers": ["carol@example.com"]})
+    assert env.db.get_request("by-name", "ou_carol")["status"] == "approved"
+    # 按部门放进来的，等她打开成功时改过来
+    alice_api.patch("/api/pages/by-open", json={"add_viewers": ["dept:销售部"]})
+    assert env.db.get_request("by-open", "ou_carol")["status"] == "rejected"
+    assert carol.get("/by-open.html").status_code == 200
+    assert env.db.get_request("by-open", "ou_carol")["status"] == "approved"
+    assert "未通过" not in carol.get("/requests").text
 
 
 def test_only_the_owner_can_decide(env):

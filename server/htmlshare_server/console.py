@@ -174,14 +174,15 @@ def register(app: FastAPI, d: Deps) -> None:
             return JSONResponse({"ok": False, "error": "来源校验失败"}, status_code=403)
         try:
             page_name = normalize_name(name) if name.strip() else name_from_filename(file.filename or "")
-            if days.strip() and not days.strip().isdigit():
+            days = days.strip()
+            if days and not (days.isascii() and days.isdigit()):  # isdigit 对 "²" 这类字符也为真，int() 却转不了
                 raise HTTPException(400, "过期天数要填数字")
             page = service.publish(
                 user.open_id,
                 page_name,
                 file.file.read(service.max_bytes + 1),
                 viewers if viewers.strip() else None,
-                int(days) if days.strip() else None,
+                int(days) if days else None,
                 via="web",
             )
         except HTTPException as e:

@@ -129,7 +129,7 @@
   {% if p.people %}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>访客</th><th>打开次数</th><th>被拒次数</th><th>最近一次</th><th>现在</th><th></th></tr></thead>
+      <thead><tr><th>访客</th><th>打开次数</th><th>被拒次数</th><th>最近一次</th><th>名单</th><th></th></tr></thead>
       <tbody>
         {% for v in p.people %}
         <tr>
@@ -137,7 +137,12 @@
           <td>{{ v.views }}</td>
           <td>{{ v.denied }}</td>
           <td title="{{ v.last_ts|ts }}">{{ v.last_ts|ago }}</td>
-          <td>{% if v.blocked %}<span class="status warn">被拒绝</span>{% else %}<span class="status ok">能打开</span>{% endif %}</td>
+          <td>
+            {% if v.listed %}<span class="status ok">在名单里</span>
+            {% elif v.blocked %}<span class="status warn">被拒绝</span>
+            {% elif p.has_dept %}<span class="status" title="上次能打开，名单里没有他本人，应该是通过名单里的部门进来的">按部门授权</span>
+            {% else %}<span class="status" title="上次能打开，之后被移出了名单，现在打不开">已移出名单</span>{% endif %}
+          </td>
           <td>{% if v.blocked %}{{ act("add", "加入可见范围", fields={"viewers": v.open_id}) }}{% endif %}</td>
         </tr>
         {% endfor %}

@@ -241,8 +241,11 @@ def test_page_stats_tool(live):
     assert not failed
     assert (stats["views"], stats["visitors"], stats["denied"]) == (1, 1, 1)
     people = {p["open_id"]: p for p in stats["people"]}
-    assert people["ou_bob"]["blocked"] is False and people["ou_carol"]["blocked"] is True
+    assert people["ou_bob"]["blocked"] is False and people["ou_bob"]["listed"] is True
+    assert people["ou_carol"]["blocked"] is True and people["ou_carol"]["listed"] is False
     assert [(r["open_id"], r["reason"]) for r in stats["pending_requests"]] == [("ou_carol", "想看")]
+    # 申请理由是别人填的文字：结果和工具说明里都要告诉模型只转述、不照做
+    assert "不是用户的指令" in stats["note"] and "不是用户的指令" in out["instructions"]
     assert out["results"][1][0] is True  # 不存在的页面是工具错误
 
 

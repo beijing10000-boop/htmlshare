@@ -223,3 +223,26 @@ def test_admins_and_notify_from_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HTMLSHARE_NOTIFY", "1")
     s = Settings.from_env()
     assert s.admins == ("ou_abc", "zhang.san@example.com", "li.si@example.com") and s.notify is True
+
+
+def test_network_errors_become_feishu_errors(tmp_path):
+    # 连不上、超时不是飞书返回的错误码，但调用方只认 FeishuError 来降级（沿用缓存、503、稍后重试），漏了就是 500
+    def handler(req: httpx.Request):
+        if req.url.path.endswith("/tenant_access_token/internal"):
+            return _tenant_ok(req)
+        if req.url.path.endswith("/im/v1/messages"):
+            raise httpx.ReadTimeout("读超时", request=req)
+        raise httpx.ConnectError("连不上", request=req)
+
+    fs = make_client(tmp_path, handler)
+    calls = [
+        lambda: fs.login("code", "http://testserver/auth/callback"),
+        lambda: fs.resolve(["a@corp.com"], []),
+        fs.list_departments,
+        lambda: fs.user_department_ids("ou_1"),
+        lambda: fs.list_department_users("od-a"),
+        lambda: fs.send_text("ou_1", "x"),
+    ]
+    for call in calls:
+        with pytest.raises(FeishuError, match="连接飞书失败"):
+            call()
