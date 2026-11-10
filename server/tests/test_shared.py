@@ -44,15 +44,20 @@ def test_shared_list_matches_view_permission(env):
         assert (status == 200) == listed, (name, status)
 
 
-def test_home_shows_mine_and_shared(env):
+def test_console_shows_mine_and_shared(env):
     setup_pages(env)
-    r = env.browser("bob@example.com").get("/")
-    mine, rest = r.text.split("我发布的页面")[1].split("分享给我的页面")
-    shared = rest.split("我的接入凭证")[0]
-    assert "bob-own" in mine and "carol-all" not in mine
+    bob = env.browser("bob@example.com")
+    mine = bob.get("/me/pages").text
+    assert "bob-own" in mine and "carol-all" not in mine and "给 bob" not in mine
+    shared = bob.get("/shared").text
     assert "给 bob" in shared and "carol 的" in shared and "部门:技术中心/运维部" in shared
     assert "bob-own" not in shared
     assert "私有页面甲" not in shared and "早就过期的页面乙" not in shared and "给 carol" not in shared
+    # 概览上两块都有，各列最近的几个
+    home = bob.get("/").text
+    mine, shared = home.split("<h2>我发布的页面</h2>")[1].split("<h2>分享给我的页面</h2>")
+    assert "bob 自己的" in mine and "carol 的" not in mine
+    assert "carol 的" in shared.split("<h2>最近访问</h2>")[0]
 
 
 def test_empty_shared_list(env):

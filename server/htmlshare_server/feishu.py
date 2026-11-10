@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 import time
 from dataclasses import dataclass
@@ -64,6 +65,14 @@ class FeishuClient:
         self._tenant_token_exp = 0.0
         self._lock = threading.Lock()
 
+    def _call(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """所有请求都走这里：连不上、超时这类网络错误也算 FeishuError。
+        调用方只认这一种异常来降级（沿用旧缓存、返回 503、提示稍后重试），漏了就是 500。"""
+        try:
+            return self.http.request(method, url, **kwargs)
+        except httpx.HTTPError as e:
+            raise FeishuError(f"连接飞书失败：{type(e).__name__} {e}".rstrip()) from None
+
     def authorize_url(self, redirect_uri: str, state: str) -> str:
         query = urlencode(
             {"client_id": self.s.feishu_app_id, "response_type": "code", "redirect_uri": redirect_uri, "state": state},
@@ -73,7 +82,7 @@ class FeishuClient:
 
     def login(self, code: str, redirect_uri: str) -> FeishuUser:
         body = _json(
-            self.http.post(
+            self._call("POST",
                 f"{self.s.feishu_open_base}/open-apis/authen/v2/oauth/token",
                 json={
                     "grant_type": "authorization_code",
@@ -89,7 +98,7 @@ class FeishuClient:
         if not token:
             raise FeishuError("换取 user_access_token 失败：响应中没有 access_token")
         info = _json(
-            self.http.get(
+            self._call("GET",
                 f"{self.s.feishu_open_base}/open-apis/authen/v1/user_info",
                 headers={"Authorization": f"Bearer {token}"},
             ),
@@ -107,7 +116,7 @@ class FeishuClient:
             if self._tenant_token and time.time() < self._tenant_token_exp:
                 return self._tenant_token
             body = _json(
-                self.http.post(
+                self._call("POST",
                     f"{self.s.feishu_open_base}/open-apis/auth/v3/tenant_access_token/internal",
                     json={"app_id": self.s.feishu_app_id, "app_secret": self.s.feishu_app_secret},
                 ),
@@ -125,7 +134,7 @@ class FeishuClient:
             batch_e, emails = emails[:50], emails[50:]
             batch_m, mobiles = mobiles[:50], mobiles[50:]
             body = _json(
-                self.http.post(
+                self._call("POST",
                     f"{self.s.feishu_open_base}/open-apis/contact/v3/users/batch_get_id",
                     params={"user_id_type": "open_id"},
                     headers={"Authorization": f"Bearer {self._tenant_access_token()}"},
@@ -144,7 +153,7 @@ class FeishuClient:
 
     def _get(self, path: str, params: dict, what: str) -> dict:
         return _json(
-            self.http.get(
+            self._call("GET",
                 f"{self.s.feishu_open_base}{path}",
                 params=params,
                 headers={"Authorization": f"Bearer {self._tenant_access_token()}"},
@@ -208,6 +217,18 @@ class FeishuClient:
                 return out
             params["page_token"] = data["page_token"]
 
+    def send_text(self, open_id: str, text: str) -> None:
+        """以应用机器人的身份给一个人发文本消息（应用要开机器人能力和 im:message:send_as_bot）。"""
+        _json(
+            self._call("POST",
+                f"{self.s.feishu_open_base}/open-apis/im/v1/messages",
+                params={"receive_id_type": "open_id"},
+                headers={"Authorization": f"Bearer {self._tenant_access_token()}"},
+                json={"receive_id": open_id, "msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)},
+            ),
+            "发送飞书消息",
+        )
+
 
 DEV_DEPARTMENTS = [
     Dept("od-dev-tech", "技术中心", "0"),
@@ -253,6 +274,7 @@ class FakeFeishu:
         self.people = people
         self._emails: dict[str, str] = {}
         self.calls: dict[str, int] = {"list_departments": 0, "user_department_ids": 0, "list_department_users": 0}
+        self.sent: list[tuple[str, str]] = []  # send_text 发出的 (open_id, 文本)，测试里核对
 
     @staticmethod
     def open_id_for(key: str) -> str:
@@ -294,3 +316,6 @@ class FakeFeishu:
             elif key in self.directory:
                 out[key] = self.directory[key]
         return out
+
+    def send_text(self, open_id: str, text: str) -> None:
+        self.sent.append((open_id, text))

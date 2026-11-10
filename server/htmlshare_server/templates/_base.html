@@ -1,0 +1,75 @@
+{# 控制台外壳：侧栏 + 顶栏。布局和组件来自 ui-kit（与运维控制台共用），页面只填 content。 #}
+{% from "_macros.html" import nav_link %}
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>{{ title }} · HTML 分享站</title>
+    {# ?v= 跟着版本号走，升级后浏览器不会沿用旧的脚本和样式 #}
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={{ version }}" />
+    <link rel="stylesheet" href="/static/ui-kit.css?v={{ version }}" />
+    <link rel="stylesheet" href="/static/app.css?v={{ version }}" />
+    <script src="/static/ui-kit.js?v={{ version }}"></script>
+    <script defer src="/static/app.js?v={{ version }}"></script>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="/">
+          <span class="logo">{{ icon("logo") }}</span>
+          <span><strong>HTML 分享站</strong><small>AI 报告 · 飞书授权访问</small></span>
+        </a>
+        <nav class="nav" aria-label="主导航">
+          <div class="nav-caption">工作台</div>
+          {{ nav_link(shell, "overview", "/", "概览", kit="overview") }}
+          {{ nav_link(shell, "pages", "/me/pages", "我发布的", svg="page") }}
+          {{ nav_link(shell, "shared", "/shared", "分享给我的", svg="inbox") }}
+          {{ nav_link(shell, "requests", "/requests", "访问申请", svg="request", badge=shell.pending) }}
+          <div class="nav-caption">接入</div>
+          {{ nav_link(shell, "connect", "/connect", "接入 AI 工具", kit="ai") }}
+          <div class="nav-caption">治理</div>
+          {{ nav_link(shell, "audit", "/audit", "操作审计", kit="audit") }}
+          {% if shell.is_admin %}
+          {{ nav_link(shell, "admin_pages", "/admin/pages", "全站页面", svg="globe") }}
+          {{ nav_link(shell, "admin_status", "/admin/status", "系统状态", kit="pulse") }}
+          {% endif %}
+        </nav>
+        <div class="sidebar-foot">
+          <div class="service-line"><span class="indicator"></span><span>v{{ version }}</span> · 飞书登录</div>
+          <div class="user-card">
+            <span class="avatar" aria-hidden="true">{{ shell.initial }}</span>
+            <div><strong>{{ shell.user_name }}</strong><small>{{ "管理员" if shell.is_admin else "成员" }}</small></div>
+            <a class="btn subtle small" href="/auth/logout">退出</a>
+          </div>
+        </div>
+      </aside>
+      <button class="nav-backdrop" data-action="toggle-nav" type="button" aria-label="关闭导航"></button>
+      <main class="workspace">
+        <header class="topbar">
+          <div class="topbar-title">
+            <button class="btn subtle icon-only" id="menu-toggle" data-action="toggle-nav" data-icon="menu" aria-label="打开导航" aria-expanded="false" type="button"></button>
+            <div>
+              <nav class="breadcrumb" aria-label="当前位置">
+                <span>HTML 分享站</span><span aria-hidden="true">/</span>
+                {% if crumb_href %}<a href="{{ crumb_href }}">{{ section }}</a>{% else %}<span>{{ section }}</span>{% endif %}
+              </nav>
+              <h1>{{ heading or title }}</h1>
+            </div>
+          </div>
+          <div class="top-actions">
+            {% block actions %}{% endblock %}
+            <button id="reload" class="btn subtle icon-only" data-icon="refresh" type="button" aria-label="刷新当前页面" title="刷新"></button>
+            <button id="theme-toggle" class="btn subtle icon-only" type="button" aria-label="切换深浅色主题"></button>
+          </div>
+        </header>
+        <section class="content">
+          {% if flash %}<div id="flash" data-type="{{ flash[0] }}" hidden>{{ flash[1] }}</div>{% endif %}
+          {% block content %}{% endblock %}
+        </section>
+      </main>
+    </div>
+    {% block dialogs %}{% endblock %}
+  </body>
+</html>

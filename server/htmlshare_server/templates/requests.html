@@ -1,0 +1,78 @@
+{% extends "_base.html" %}
+{% from "_macros.html" import decide %}
+{% set title = "访问申请" %}
+{% set section = "工作台" %}
+
+{% macro state(r) %}
+{% if r.status == "pending" %}<span class="status pending">等待处理</span>
+{% elif r.status == "approved" %}<span class="status ok">已通过</span>
+{% else %}<span class="status failed">未通过</span>{% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="page-intro">
+  <p>不在可见范围里的人打开页面时可以提交申请。通过后对方会被加进这个页面的可见范围；拒绝后对方可以再次申请。</p>
+</div>
+
+<section class="panel">
+  <div class="section-head">
+    <div><h2>等我处理</h2><p>别人申请查看我发布的页面</p></div>
+  </div>
+  {% if pending %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>申请人</th><th>页面</th><th>理由</th><th>申请时间</th><th></th></tr></thead>
+      <tbody>
+        {% for r in pending %}
+        <tr>
+          <td>{{ r.name }}</td>
+          <td><a class="cell-title" href="/me/pages/{{ r.page }}">{{ r.title or r.page }}</a><small class="mono">{{ r.page }}</small></td>
+          <td>{{ r.reason or "没有填写理由" }}</td>
+          <td title="{{ r.created_ts|ts }}">{{ r.created_ts|ago }}</td>
+          <td>{{ decide(r, "/requests") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">没有等你处理的申请。有人申请查看你发布的页面时会出现在这里，侧栏也会显示数量。</p>
+  {% endif %}
+</section>
+
+<div class="grid2">
+  <section class="panel">
+    <div class="section-head">
+      <div><h2>我发出的申请</h2><p>我想看别人的页面</p></div>
+    </div>
+    {% for r in mine %}
+    <div class="row-item">
+      <div>
+        <a href="/{{ r.page }}.html" target="_blank" rel="noopener">{{ r.title or r.page }}</a>
+        <p>{{ r.owner_name or "发布者" }} · {{ r.created_ts|ago }}申请{% if r.reason %} · {{ r.reason }}{% endif %}</p>
+      </div>
+      {{ state(r) }}
+    </div>
+    {% else %}
+    <p class="empty">你还没有申请过别人的页面。打开没有权限的页面时，可以在提示页上提交申请。</p>
+    {% endfor %}
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div><h2>我处理过的</h2><p>最近 100 条</p></div>
+    </div>
+    {% for r in done %}
+    <div class="row-item">
+      <div>
+        <strong>{{ r.name }}</strong> 申请查看 <a href="/me/pages/{{ r.page }}">{{ r.title or r.page }}</a>
+        <p>{{ r.decided_ts|ts }} 处理{% if r.reason %} · {{ r.reason }}{% endif %}</p>
+      </div>
+      {{ state(r) }}
+    </div>
+    {% else %}
+    <p class="empty">还没有处理过申请。</p>
+    {% endfor %}
+  </section>
+</div>
+{% endblock %}

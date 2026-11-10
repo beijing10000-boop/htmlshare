@@ -1,0 +1,72 @@
+{% extends "_base.html" %}
+{% from "_macros.html" import viewers, left, upload_dialog %}
+{% set title = "我发布的" %}
+{% set section = "工作台" %}
+
+{% block actions %}
+<button class="btn primary" type="button" data-open-dialog="upload-dialog">{{ icon("upload") }}上传 HTML</button>
+{% endblock %}
+
+{% block content %}
+<div class="page-intro">
+  <p>共 {{ pages|length }} 个页面，占用 {{ pages|sum(attribute="size")|size }}。同一个页面名再次发布就是覆盖更新，链接和可见范围不变。</p>
+</div>
+
+<section class="panel">
+  {% if pages %}
+  <div class="toolbar">
+    <input type="search" data-filter-input="pages-table" placeholder="搜索标题、页面名、可见人" aria-label="搜索页面" />
+    <div class="chips" data-filter-chips="pages-table" role="group" aria-label="按可见范围筛选">
+      <button type="button" class="category-chip active" data-chip="">全部</button>
+      <button type="button" class="category-chip" data-chip="all">全员可见</button>
+      <button type="button" class="category-chip" data-chip="scoped">指定范围</button>
+      <button type="button" class="category-chip" data-chip="private">仅自己</button>
+      <button type="button" class="category-chip" data-chip="expiring">7 天内到期</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table id="pages-table">
+      <thead>
+        <tr><th>页面</th><th>可见范围</th><th>打开次数</th><th>最近访问</th><th>更新</th><th>有效期</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for p in pages %}
+        <tr data-tags="{{ p.scope }}{{ ' expiring' if p.expiring }}">
+          <td>
+            <a class="cell-title" href="/me/pages/{{ p.name }}">{{ p.title or p.name }}</a>
+            <small class="mono">{{ p.name }}</small>
+          </td>
+          <td>{{ viewers(p.viewers) }}</td>
+          <td class="nowrap">{{ p.views }}<small>{{ p.visitors }} 位访客</small></td>
+          <td class="nowrap" title="{{ p.last_view_ts|ts }}">{{ p.last_view_ts|ago("还没人看") }}</td>
+          <td class="nowrap" title="{{ p.updated_ts|ts }}">{{ p.updated_ts|ago }}</td>
+          <td class="nowrap" title="{{ p.expires_ts|ts('不会自动删除') }}">{{ left(p) }}</td>
+          <td>
+            <div class="actions">
+              <a class="btn small icon-only" href="/{{ p.name }}.html" target="_blank" rel="noopener" title="打开页面" aria-label="打开页面">{{ icon("open") }}</a>
+              <button class="btn small icon-only" type="button" data-copy="{{ p.url }}" title="复制链接" aria-label="复制链接">{{ icon("copy") }}</button>
+              <a class="btn small" href="/me/pages/{{ p.name }}">设置</a>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+        <tr data-empty hidden><td colspan="7" class="empty">没有符合条件的页面，换个关键字或筛选条件。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p>还没有发布过页面。</p>
+    <p>接入 AI 工具后对它说「把这个报告发布出去，给张三和技术中心看」，或者点右上角上传一个 HTML 文件。</p>
+    <div class="actions center">
+      <a class="btn primary" href="/connect">接入 AI 工具</a>
+      <button class="btn" type="button" data-open-dialog="upload-dialog">上传 HTML</button>
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block dialogs %}
+{{ upload_dialog(max_mb, default_days, expiry_choices) }}
+{% endblock %}

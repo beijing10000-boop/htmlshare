@@ -1,0 +1,68 @@
+{% extends "_base.html" %}
+{% set title = "系统状态" %}
+{% set section = "治理" %}
+
+{% macro row(name, desc, value, state="") %}
+<div class="row-item">
+  <div><strong>{{ name }}</strong><p>{{ desc }}</p></div>
+  <div class="row-meta">{% if state %}<span class="status {{ state }}">{{ value }}</span>{% else %}<strong>{{ value }}</strong>{% endif %}</div>
+</div>
+{% endmacro %}
+
+{% block content %}
+{% if st.dev %}<p class="notice error" role="alert">当前是开发模式（HTMLSHARE_DEV_FAKE_LOGIN）：登录不经过飞书，任何人可以冒充任何邮箱。生产环境必须关闭。</p>{% endif %}
+
+<div class="stats">
+  <div class="stat"><div class="label">页面</div><div class="value">{{ st.pages }}</div><div class="hint">{{ st.owners }} 位发布者 · {{ st.bytes|size }}</div></div>
+  <div class="stat"><div class="label">登录过的用户</div><div class="value">{{ st.users }}</div><div class="hint">{{ st.tokens }} 个有效凭证</div></div>
+  <div class="stat"><div class="label">近 7 天被打开</div><div class="value">{{ st.week.views }}</div><div class="hint">{{ st.week.visitors }} 位访客 · {{ st.week.denied }} 次被拒绝</div></div>
+  <div class="stat{{ ' attention' if st.pending_requests }}"><div class="label">待处理的访问申请</div><div class="value">{{ st.pending_requests }}</div><div class="hint">全站，等各发布者处理</div></div>
+</div>
+
+<div class="grid2">
+  <section class="panel">
+    <div class="section-head">
+      <div><h2>飞书与通讯录</h2><p>登录、按姓名和部门授权都依赖它</p></div>
+      {% if st.directory_sync %}
+      <form method="post" action="/admin/status" class="inline">
+        <input type="hidden" name="action" value="sync" />
+        <button type="submit" class="btn small">立即同步通讯录</button>
+      </form>
+      {% endif %}
+    </div>
+    {{ row("飞书应用", "登录和发布用同一个应用，open_id 才能对上", st.feishu_app or "开发模式，未配置") }}
+    {{ row("限制登录企业", "FEISHU_TENANT_KEY：只允许本企业的飞书账号登录", "已限制" if st.tenant_locked else "未限制", "ok" if st.tenant_locked else "warn") }}
+    {% if st.directory_sync %}
+    {{ row("通讯录快照", "按姓名查人用，每 " ~ st.directory_hours ~ " 小时同步一次；" ~ st.directory ~ " 人", st.directory_ts|ago("还没同步过"), "ok" if st.directory_ts else "warn") }}
+    {% else %}
+    {{ row("通讯录快照", "HTMLSHARE_DIRECTORY_SYNC=0，按姓名查人不可用", "已关闭", "warn") }}
+    {% endif %}
+    {{ row("部门", st.dept_error or "按部门授权和「含子部门」的判断用，缓存 10 分钟", st.departments ~ " 个", "failed" if st.dept_error else "") }}
+    {{ row("飞书通知", "访问申请提交、通过、拒绝，管理员下线页面时给当事人发消息（HTMLSHARE_NOTIFY）", "已开启" if st.notify else "未开启", "ok" if st.notify else "") }}
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div><h2>服务与数据</h2><p>数据都在 /data 卷里，备份这个卷即可</p></div>
+    </div>
+    {{ row("版本", st.public_url, "v" ~ st.version) }}
+    {{ row("数据库", "页面信息、名单、凭证、访问记录、审计", st.db_bytes|size) }}
+    {{ row("访问记录", "每次打开页面一条（含被拒绝的）；页面删除时一并清除", st.access_rows ~ " 条") }}
+    {{ row("操作审计", "发布、改名单、凭证、访问申请、管理员操作", st.audit_rows ~ " 条") }}
+    {{ row("默认 / 最长有效期", "发布时不指定就用默认值；0 表示永不过期", st.limits.default_expire_days ~ " / " ~ st.limits.max_expire_days ~ " 天") }}
+    {{ row("单个文件上限", "HTMLSHARE_MAX_UPLOAD_MB", st.limits.max_upload_mb ~ " MB") }}
+    {{ row("浏览器登录有效期", "HTMLSHARE_SESSION_DAYS", st.limits.session_days ~ " 天") }}
+  </section>
+</div>
+
+<section class="panel">
+  <div class="section-head">
+    <div><h2>管理员</h2><p>由环境变量 HTMLSHARE_ADMINS 指定（open_id 或飞书邮箱），改完重启服务生效</p></div>
+  </div>
+  {% for a in admins %}
+  <div class="row-item">
+    <div><strong>{{ a.name or "还没登录过" }}</strong><p class="mono">{{ a.key }}</p></div>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

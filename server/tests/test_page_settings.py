@@ -22,7 +22,9 @@ def acl_values(env, name="doc"):
 
 
 def post(c, action, **form):
-    return c.post("/me/pages/doc", data={"action": action, **form}, headers=ORIGIN)
+    """提交一个操作。成功时服务端跳回页面（?done=xxx 带提示），这里跟过去拿到最终页面。"""
+    r = c.post("/me/pages/doc", data={"action": action, **form}, headers=ORIGIN)
+    return c.get(r.headers["location"]) if r.status_code == 303 else r
 
 
 def test_settings_page_shows_viewers_and_link_from_home(env):
@@ -83,9 +85,29 @@ def test_expiry_and_delete(env):
     assert "已修改过期时间" in r.text and env.db.get_page("doc").expires_at is None
     r = post(alice, "expiry", days="9999")
     assert "过期天数必须在" in r.text
-    r = post(alice, "delete")
-    assert r.status_code == 303 and r.headers["location"] == "/"
+    r = alice.post("/me/pages/doc", data={"action": "delete"}, headers=ORIGIN)
+    assert r.status_code == 303 and r.headers["location"] == "/me/pages?done=deleted"
     assert env.db.get_page("doc") is None
+    assert "页面已删除" in alice.get(r.headers["location"]).text
+
+
+def test_success_redirects_so_reload_does_not_resubmit(env):
+    alice = env.browser("alice@example.com")
+    r = alice.post("/me/pages/doc", data={"action": "add", "viewers": "carol@example.com"}, headers=ORIGIN)
+    assert r.status_code == 303 and r.headers["location"] == "/me/pages/doc?done=viewers"
+    # 从概览点「续期」带 next，处理完回到概览
+    r = alice.post("/me/pages/doc", data={"action": "expiry", "days": "30", "next": "/"}, headers=ORIGIN)
+    assert r.headers["location"] == "/?done=expiry"
+    # next 只能是站内路径
+    r = alice.post("/me/pages/doc", data={"action": "expiry", "days": "30", "next": "https://evil.com/"}, headers=ORIGIN)
+    assert r.headers["location"] == "/?done=expiry"
+
+
+def test_post_without_session_says_expired_instead_of_redirecting(env):
+    # 表单提交后再跨站跳飞书会被浏览器拦，所以会话过期时给提示页
+    r = env.browser().post("/me/pages/doc", data={"action": "set_private"}, headers=ORIGIN)
+    assert r.status_code == 401 and "登录已过期" in r.text
+    assert acl_values(env) == ["ou_dave"]
 
 
 def test_foreign_origin_rejected(env):

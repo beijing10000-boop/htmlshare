@@ -106,6 +106,11 @@ class UserDirectory:
             self._last_attempt = time.time()
             self._wake.set()
 
+    def sync_now(self) -> None:
+        """管理员在「系统状态」里手动触发：不看最小间隔，后台线程立刻同步一次。"""
+        self._last_attempt = time.time()
+        self._wake.set()
+
     def start(self) -> None:
         if self._thread is None:
             self._thread = threading.Thread(target=self._loop, name="directory-sync", daemon=True)

@@ -1,0 +1,121 @@
+{# 各页面共用的小组件。 #}
+
+{% macro nav_link(shell, key, href, label, kit="", svg="", badge=0) %}
+<a class="nav-link{{ ' active' if shell.active == key }}" href="{{ href }}"{% if shell.active == key %} aria-current="page"{% endif %}>
+  {% if kit %}<span data-icon="{{ kit }}"></span>{% else %}<span>{{ icon(svg) }}</span>{% endif %}
+  <span>{{ label }}</span>
+  {% if badge %}<span class="nav-badge" title="{{ badge }} 个待处理">{{ badge }}</span>{% endif %}
+</a>
+{% endmacro %}
+
+{# 可见范围：最多显示 max 个胶囊，其余收成 +N（鼠标停上去看全部） #}
+{% macro viewers(list, max=3) %}
+<span class="tags">
+  {% if not list %}
+  <span class="tag">仅自己</span>
+  {% else %}
+  {% for v in list[:max] %}<span class="tag{{ ' info' if v.kind == 'all' }}" title="{{ v.label }}">{{ v.label }}</span>{% endfor %}
+  {% if list|length > max %}<span class="tag" title="{{ list[max:]|map(attribute='label')|join('、') }}">+{{ list|length - max }}</span>{% endif %}
+  {% endif %}
+</span>
+{% endmacro %}
+
+{# 表格里的有效期：还剩多久（快到期的标出来），完整时间放在单元格的 title 里 #}
+{% macro left(p) %}
+{% if p.expires_ts is none %}<span class="muted">永不过期</span>{% elif p.expiring %}<span class="tag warn">{{ p.expires_ts|left }}</span>{% else %}{{ p.expires_ts|left }}{% endif %}
+{% endmacro %}
+
+{% macro expiry(ts, expiring=false) %}
+{% if ts is none %}<span class="muted">永不过期</span>{% else %}{{ ts|ts }}{% if expiring %} <span class="tag warn">{{ ts|left }}</span>{% endif %}{% endif %}
+{% endmacro %}
+
+{# 访问趋势：柱状图由 app.js 按容器宽度画；下面的表格是同一份数据的文字版 #}
+{% macro trend(daily, empty) %}
+{% if daily|sum(attribute="views") == 0 %}
+<p class="empty">{{ empty }}</p>
+{% else %}
+<div class="chart" data-chart='{{ daily|tojson }}' role="img" aria-label="最近 {{ daily|length }} 天每天的打开次数，合计 {{ daily|sum(attribute='views') }} 次"></div>
+<details class="chart-data">
+  <summary>按天看数字</summary>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>日期</th><th>打开次数</th><th>访客数</th></tr></thead>
+      <tbody>
+        {% for d in daily|reverse %}<tr><td>{{ d.date }}</td><td>{{ d.views }}</td><td>{{ d.visitors }}</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+{% endif %}
+{% endmacro %}
+
+{# 一条访问申请的「通过 / 拒绝」按钮；back 是处理完回到哪个页面 #}
+{% macro decide(r, back) %}
+<div class="actions">
+  <form method="post" action="/requests/{{ r.id }}" class="inline">
+    <input type="hidden" name="action" value="approve" /><input type="hidden" name="next" value="{{ back }}" />
+    <button type="submit" class="btn small primary">通过</button>
+  </form>
+  <form method="post" action="/requests/{{ r.id }}" class="inline"
+    data-confirm="拒绝 {{ r.name }} 的访问申请？" data-confirm-message="对方会看到申请没有通过，之后还可以再次申请。" data-confirm-text="拒绝" data-danger>
+    <input type="hidden" name="action" value="reject" /><input type="hidden" name="next" value="{{ back }}" />
+    <button type="submit" class="btn small">拒绝</button>
+  </form>
+</div>
+{% endmacro %}
+
+{# 上传 HTML 的对话框。fixed 给了页面名就是「上传新版本」（覆盖这个页面），否则是发布新页面 #}
+{% macro upload_dialog(max_mb, default_days, expiry_choices, fixed="") %}
+<dialog id="upload-dialog" aria-labelledby="upload-title">
+  <form id="upload-form" method="post" action="/me/pages" enctype="multipart/form-data">
+    <div class="modal-title">
+      <h2 id="upload-title">{{ "上传新版本" if fixed else "上传 HTML" }}</h2>
+      <button class="close" type="button" data-close-dialog data-icon="close" aria-label="关闭"></button>
+    </div>
+    <div id="upload-fields" class="fields">
+      <div class="wide">
+        <label for="up-file">HTML 文件</label>
+        <input type="file" id="up-file" name="file" accept=".html,.htm,text/html" required />
+        <p class="help">单个 HTML 文件，最大 {{ max_mb }} MB；图片、样式、脚本要内嵌在文件里或用外链。</p>
+      </div>
+      {% if fixed %}
+      <input type="hidden" name="name" value="{{ fixed }}" />
+      <p class="wide notice">会覆盖 <b>{{ fixed }}</b> 现在的内容，链接、可见范围和过期时间都不变。</p>
+      {% else %}
+      <div>
+        <label for="up-name">页面名（出现在链接里）</label>
+        <input id="up-name" name="name" maxlength="64" autocomplete="off" placeholder="例如 q3-report" />
+        <p class="help">小写字母、数字和连字符；不填按文件名生成。和你已有的页面同名就是覆盖更新。</p>
+      </div>
+      <div>
+        <label for="up-days">过期时间</label>
+        <select id="up-days" name="days">
+          <option value="">默认（{{ default_days ~ " 天后" if default_days else "永不过期" }}）</option>
+          {% for d in expiry_choices %}<option value="{{ d }}">{{ d }} 天后</option>{% endfor %}
+          <option value="0">永不过期</option>
+        </select>
+        <p class="help">到期后页面自动删除，链接失效。</p>
+      </div>
+      <div class="wide">
+        <label for="up-viewers">谁能看</label>
+        <input id="up-viewers" name="viewers" list="viewer-suggest" data-suggest autocomplete="off"
+          placeholder="姓名、飞书邮箱、手机号或部门，多个用逗号分隔；all 表示全员" />
+        <p class="help">不填：新页面只有你自己能看，覆盖更新时保留原来的可见范围。发布后随时可以改。</p>
+      </div>
+      {% endif %}
+    </div>
+    <p id="upload-error" class="inline-error" role="alert" hidden></p>
+    <div id="upload-result" hidden>
+      <p class="notice success">已发布。</p>
+      <p class="notice warn">下面这些可见人没有加上，到页面设置里重新添加：</p>
+      <ul id="upload-unresolved" class="plain-list"></ul>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn" data-close-dialog id="upload-cancel">取消</button>
+      <button type="submit" class="btn primary" id="upload-submit">{{ "上传并覆盖" if fixed else "发布" }}</button>
+      <a class="btn primary" id="upload-go" href="#" hidden>去页面设置</a>
+    </div>
+  </form>
+</dialog>
+{% if not fixed %}<datalist id="viewer-suggest"></datalist>{% endif %}
+{% endmacro %}

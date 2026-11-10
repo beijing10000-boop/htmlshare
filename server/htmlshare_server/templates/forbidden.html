@@ -1,0 +1,20 @@
+{% extends "_plain.html" %}
+{% set title = "没有访问权限" %}
+{% set who = owner_name or "发布者" %}
+{% block body %}
+<p class="muted">你（{{ user_name }}）不在页面 <code>{{ page }}</code> 的可见范围里。</p>
+{% if req and req.status == "pending" %}
+<p class="notice" role="status">已在 {{ req.created_ts|ts }} 提交访问申请，等 <b>{{ who }}</b> 处理。通过后刷新这个页面就能打开。</p>
+{% else %}
+{% if req and req.status == "rejected" %}
+<p class="notice warn" role="status">上次的申请没有通过。可以补充理由再申请一次，或者直接联系 {{ who }}。</p>
+{% endif %}
+<form method="post" action="/me/requests" class="request-form">
+  <input type="hidden" name="page" value="{{ page }}" />
+  <label for="reason">申请理由（可以不填）</label>
+  <textarea id="reason" name="reason" rows="2" maxlength="200" placeholder="例如：需要核对这份报告里的容量数据"></textarea>
+  <button type="submit" class="btn primary">向 {{ who }} 申请访问</button>
+</form>
+{% endif %}
+<a class="setup-link" href="/">进入分享站</a>
+{% endblock %}
