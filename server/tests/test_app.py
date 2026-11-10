@@ -16,9 +16,46 @@ def test_inject_shim_position():
 
 
 def test_view_requires_login(env):
+    # 没登录：原地显示登录页（和运维控制台一样，点了按钮才去飞书），登录后回到这个地址
     r = env.browser().get("/report.html")
-    assert r.status_code == 302
-    assert r.headers["location"] == "/auth/login?next=%2Freport.html"
+    assert r.status_code == 401 and "location" not in r.headers
+    assert title_of(r) == "登录 · HTML 分享站" and "使用飞书账号登录" in r.text
+    assert 'href="/auth/login?next=%2Freport.html"' in r.text
+    assert "登录后打开页面 <code>report</code>" in r.text  # 从分享链接进来的，说明登录后会打开哪个页面
+
+
+def test_login_page(env):
+    anon = env.browser()
+    # 带查询参数的地址原样带回去
+    r = anon.get("/audit?scope=all&before=9")
+    assert r.status_code == 401 and 'href="/auth/login?next=%2Faudit%3Fscope%3Dall%26before%3D9"' in r.text
+    assert "登录后打开页面" not in r.text  # 控制台地址不是页面链接，不显示这句
+    # 固定的登录地址；next 只认站内路径
+    r = anon.get("/login")
+    assert r.status_code == 200 and 'href="/auth/login?next=%2F"' in r.text
+    assert 'href="/auth/login?next=%2Fme%2Fpages"' in anon.get("/login", params={"next": "/me/pages"}).text
+    for bad in ["https://evil.com/", "//evil.com", "/\\evil.com"]:
+        assert 'href="/auth/login?next=%2F"' in anon.get("/login", params={"next": bad}).text, bad
+    # 已经登录的不用再看登录页
+    alice = env.browser("alice@example.com")
+    r = alice.get("/login", params={"next": "/me/pages"})
+    assert r.status_code == 302 and r.headers["location"] == "/me/pages"
+    assert alice.get("/login", params={"next": "https://evil.com/"}).headers["location"] == "/"
+    # 退出后回到登录页
+    r = alice.get("/auth/logout")
+    assert r.status_code == 200 and "你已退出登录" in r.text and 'href="/auth/login?next=%2F"' in r.text
+    assert alice.get("/").status_code == 401
+
+
+def test_failed_login_comes_back_to_the_login_page(env):
+    c = env.browser()
+    c.get("/auth/login", params={"next": "/report.html"})
+    # 在飞书那边点了取消：回到登录页，再点一次还是去原来要去的页面
+    r = c.get("/auth/callback", params={"error": "access_denied"})
+    assert r.status_code == 400 and "你取消了飞书授权" in r.text
+    assert 'href="/auth/login?next=%2Freport.html"' in r.text and "hs_session" not in c.cookies
+    r = c.get("/auth/callback", params={"state": "forged", "email": "bob@example.com"})
+    assert r.status_code == 400 and "登录状态校验失败" in r.text and "使用飞书账号登录" in r.text
 
 
 def test_login_returns_to_page(env):
@@ -196,7 +233,12 @@ def test_cli_device_login(env):
     browser = env.browser()
     verify_path = start["verification_url"].replace("http://testserver", "")
     r = browser.get(verify_path)
-    assert r.status_code == 302  # 需要先登录
+    assert r.status_code == 401 and "使用飞书账号登录" in r.text  # 需要先登录
+    # 确认页开着的时候会话过期了：不授权，回到登录页，登录后还是这个代码的确认页
+    r = browser.post("/cli/verify", data={"user_code": start["user_code"]}, headers={"Origin": "http://testserver"})
+    assert r.status_code == 401 and "还没有授权" in r.text
+    assert f'href="/auth/login?next=%2Fcli%2Fverify%3Fuser_code%3D{start["user_code"]}"' in r.text
+    assert c.post("/api/cli/poll", json={"device_code": start["device_code"]}).json() == {"status": "pending"}
     login(browser, "alice@example.com", next_path=verify_path)
     r = browser.get(verify_path)
     assert r.status_code == 200 and start["user_code"] in r.text

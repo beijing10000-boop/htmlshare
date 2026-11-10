@@ -17,7 +17,7 @@
       <section class="login-card">
         <div class="logo">{{ icon("logo") }}</div>
         <div class="eyebrow">{% block eyebrow %}{{ user_name or "HTML 分享站" }}{% endblock %}</div>
-        <h1>{{ title }}</h1>
+        <h1>{% block heading %}{{ title }}{% endblock %}</h1>
         {% block body %}{% endblock %}
       </section>
     </main>

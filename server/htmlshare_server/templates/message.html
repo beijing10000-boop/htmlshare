@@ -1,6 +1,5 @@
 {% extends "_plain.html" %}
 {% block body %}
 <p class="muted">{{ text }}</p>
-{% if link %}<a class="btn primary" href="{{ link[1] }}">{{ link[0] }}</a>{% endif %}
 {% if user_name is not none %}<a class="setup-link" href="/">进入分享站</a>{% endif %}
 {% endblock %}

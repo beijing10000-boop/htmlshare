@@ -41,7 +41,7 @@ def test_only_owner_can_open_or_change(env):
     assert bob.get("/me/pages/doc").status_code == 403
     assert post(bob, "set_private").status_code == 403
     assert acl_values(env) == ["ou_dave"]
-    assert env.browser().get("/me/pages/doc").status_code == 302  # 未登录跳登录
+    assert env.browser().get("/me/pages/doc").status_code == 401  # 未登录：显示登录页
     assert env.browser("alice@example.com").get("/me/pages/nope").status_code == 404
 
 

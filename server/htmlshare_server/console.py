@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -64,19 +64,10 @@ class Deps:
     service: PageService
     user_dir: UserDirectory
     read_session: Callable[[Request], Viewer | None]
-    login_redirect: Callable[[Request], RedirectResponse]
+    need_login: Callable[[Request], Response]  # 没登录时返回登录页（登录后回到当前地址）
     origin_ok: Callable[[Request], bool]
     new_token: Callable[[str, str], str]
     client_wheel: Callable[[], Path | None]
-
-
-def safe_next(target: str | None) -> str:
-    """只允许跳回站内路径。"""
-    if not target or not target.startswith("/") or target.startswith("//") or "\\" in target:
-        return "/"
-    if any(ord(ch) < 0x20 for ch in target):
-        return "/"
-    return target
 
 
 def register(app: FastAPI, d: Deps) -> None:
@@ -104,7 +95,7 @@ def register(app: FastAPI, d: Deps) -> None:
         return {"max_mb": s.max_upload_mb, "default_days": s.default_expire_days, "expiry_choices": expiry_choices()}
 
     def done(target: str, code: str) -> RedirectResponse:
-        path, _, fragment = safe_next(target).partition("#")
+        path, _, fragment = web.safe_next(target).partition("#")
         url = f"{path}{'&' if '?' in path else '?'}done={code}" + (f"#{fragment}" if fragment else "")
         return RedirectResponse(url, status_code=303)
 
@@ -112,11 +103,20 @@ def register(app: FastAPI, d: Deps) -> None:
         """控制台里的整页提示：说明哪里不行，给一个去处。"""
         return web.render("notice.html", status, shell=shell(user, active), title=title, text=text, back=back)
 
+    def came_from(request: Request) -> str:
+        """表单是从哪个页面提交的（同源的 Referer）：重新登录后回到那里，而不是一律回概览。"""
+        ref = urlsplit(request.headers.get("referer", ""))
+        if f"{ref.scheme}://{ref.netloc}" != s.origin:
+            return "/"
+        query = urlencode([(k, v) for k, v in parse_qsl(ref.query) if k != "done"])  # 别带着上一次操作的成功提示回去
+        return ref.path + (f"?{query}" if query else "")
+
     def poster(request: Request) -> tuple[Viewer | None, Response | None]:
-        """表单 POST 的统一检查。会话过期时给提示页而不是直接跳飞书（表单提交后跨站跳转会被浏览器拦）。"""
+        """表单 POST 的统一检查。会话过期时回到登录页说明原因，而不是直接跳飞书（表单提交后跨站跳转会被浏览器拦），
+        这次操作没有执行，重新登录后回到提交表单的那个页面。"""
         user = d.read_session(request)
         if not user:
-            return None, web.message("登录已过期", "请重新登录后再操作。", 401, link=("使用飞书账号登录", "/auth/login"))
+            return None, web.login_page(came_from(request), 401, error="登录已过期，这次操作没有执行。请重新登录后再试。")
         if not d.origin_ok(request):
             return None, web.message("请求被拒绝", "来源校验失败。", 403, user.label)
         return user, None
@@ -141,7 +141,7 @@ def register(app: FastAPI, d: Deps) -> None:
     def overview(request: Request):
         user = d.read_session(request)
         if not user:
-            return d.login_redirect(request)
+            return d.need_login(request)
         return web.render(
             "overview.html",
             shell=shell(user, "overview"),
@@ -154,7 +154,7 @@ def register(app: FastAPI, d: Deps) -> None:
     def my_pages(request: Request):
         user = d.read_session(request)
         if not user:
-            return d.login_redirect(request)
+            return d.need_login(request)
         pages = service.console_pages(user.open_id)
         return web.render("pages.html", shell=shell(user, "pages"), flash=flash(request), pages=pages, **upload_context())
 
@@ -200,7 +200,7 @@ def register(app: FastAPI, d: Deps) -> None:
     def page_settings(name: str, request: Request):
         user = d.read_session(request)
         if not user:
-            return d.login_redirect(request)
+            return d.need_login(request)
         return page_view(user, name, request)
 
     @app.post("/me/pages/{name}")
@@ -248,7 +248,7 @@ def register(app: FastAPI, d: Deps) -> None:
     def shared_pages(request: Request):
         user = d.read_session(request)
         if not user:
-            return d.login_redirect(request)
+            return d.need_login(request)
         shared = service.shared_with(user.open_id)
         return web.render("shared.html", shell=shell(user, "shared"), pages=shared["pages"], dept_error=shared["dept_error"])
 
@@ -263,7 +263,7 @@ def register(app: FastAPI, d: Deps) -> None:
     def access_requests(request: Request):
         user = d.read_session(request)
         if not user:
-            return d.login_redirect(request)
+            return d.need_login(request)
         return web.render(
             "requests.html",
             shell=shell(user, "requests"),
@@ -307,7 +307,7 @@ def register(app: FastAPI, d: Deps) -> None:
     def connect(request: Request):
         user = d.read_session(request)
         if not user:
-            return d.login_redirect(request)
+            return d.need_login(request)
         wheel = d.client_wheel()
         return web.render(
             "connect.html",
@@ -351,7 +351,7 @@ def register(app: FastAPI, d: Deps) -> None:
     def audit_log(request: Request, scope: str = "", before: int | None = None):
         user = d.read_session(request)
         if not user:
-            return d.login_redirect(request)
+            return d.need_login(request)
         everyone = scope == "all" and is_admin(user)
         rows = service.audit_rows(None if everyone else user.open_id, before, AUDIT_PAGE)
         return web.render(
@@ -369,7 +369,7 @@ def register(app: FastAPI, d: Deps) -> None:
     def admin_pages(request: Request):
         user = d.read_session(request)
         if not user:
-            return d.login_redirect(request)
+            return d.need_login(request)
         if denied := admin_only(user, "admin_pages"):
             return denied
         return web.render(
@@ -402,7 +402,7 @@ def register(app: FastAPI, d: Deps) -> None:
     def admin_status(request: Request):
         user = d.read_session(request)
         if not user:
-            return d.login_redirect(request)
+            return d.need_login(request)
         if denied := admin_only(user, "admin_status"):
             return denied
         admins = [{"key": key, "name": service.display_name(key) if key.startswith("ou_") else db.name_by_email(key)} for key in s.admins]
