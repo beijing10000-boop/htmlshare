@@ -253,4 +253,4 @@ def test_client_wheel_download(env):
     c = env.browser()
     assert c.get("/client/htmlshare-0.1.0-py3-none-any.whl").status_code == 200
     assert c.get("/client/other.whl").status_code == 404
-    assert "pip install http://testserver/client/htmlshare-0.1.0-py3-none-any.whl" in env.browser("bob@example.com").get("/").text
+    assert "pip install http://testserver/client/htmlshare-0.1.0-py3-none-any.whl" in env.browser("bob@example.com").get("/connect").text

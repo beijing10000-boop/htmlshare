@@ -1,0 +1,61 @@
+{% extends "_base.html" %}
+{% from "_macros.html" import viewers, left %}
+{% set title = "全站页面" %}
+{% set section = "治理" %}
+
+{% block content %}
+<div class="page-intro">
+  <p>所有人发布的页面。管理员能看到页面的标题、发布者和可见范围，可以下线页面；页面内容仍然只有可见范围里的人能打开。</p>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="label">页面</div><div class="value">{{ totals.pages }}</div><div class="hint">{{ totals.owners }} 位发布者</div></div>
+  <div class="stat"><div class="label">占用空间</div><div class="value">{{ totals.bytes|size }}</div><div class="hint">HTML 文件合计</div></div>
+  <div class="stat"><div class="label">全员可见</div><div class="value">{{ pages|selectattr("scope", "equalto", "all")|list|length }}</div><div class="hint">任何登录的同事都能打开</div></div>
+  <div class="stat"><div class="label">近 7 天被打开</div><div class="value">{{ week.views }}</div><div class="hint">{{ week.visitors }} 位访客</div></div>
+</div>
+
+<section class="panel">
+  {% if pages %}
+  <div class="toolbar">
+    <input type="search" data-filter-input="all-pages-table" placeholder="搜索标题、页面名、发布者、可见人" aria-label="搜索页面" />
+    <div class="chips" data-filter-chips="all-pages-table" role="group" aria-label="按可见范围筛选">
+      <button type="button" class="category-chip active" data-chip="">全部</button>
+      <button type="button" class="category-chip" data-chip="all">全员可见</button>
+      <button type="button" class="category-chip" data-chip="scoped">指定范围</button>
+      <button type="button" class="category-chip" data-chip="private">仅自己</button>
+      <button type="button" class="category-chip" data-chip="expiring">7 天内到期</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table id="all-pages-table">
+      <thead><tr><th>页面</th><th>发布者</th><th>可见范围</th><th>打开次数</th><th>大小</th><th>更新</th><th>有效期</th><th></th></tr></thead>
+      <tbody>
+        {% for p in pages %}
+        <tr data-tags="{{ p.scope }}{{ ' expiring' if p.expiring }}">
+          <td><span class="cell-title">{{ p.title or p.name }}</span><small class="mono">{{ p.name }}</small></td>
+          <td class="nowrap">{{ p.owner_name }}</td>
+          <td>{{ viewers(p.viewers) }}</td>
+          <td class="nowrap">{{ p.views }}<small>{{ p.visitors }} 位访客</small></td>
+          <td class="nowrap">{{ p.size|size }}</td>
+          <td class="nowrap" title="{{ p.updated_ts|ts }}">{{ p.updated_ts|ago }}</td>
+          <td class="nowrap" title="{{ p.expires_ts|ts('不会自动删除') }}">{{ left(p) }}</td>
+          <td>
+            <form method="post" action="/admin/pages/{{ p.name }}" class="inline"
+              data-confirm="下线「{{ p.title or p.name }}」？" data-confirm-message="这是 {{ p.owner_name }} 发布的页面。下线后链接立即失效、文件和访问记录一并删除，不能恢复；操作会记入审计{{ '并通知发布者' if notify }}。" data-confirm-text="下线" data-danger>
+              <input type="hidden" name="action" value="delete" />
+              <button type="submit" class="btn small danger">下线</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        <tr data-empty hidden><td colspan="8" class="empty">没有符合条件的页面，换个关键字或筛选条件。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  {% if pages|length < totals.pages %}<p class="help">只列出最近更新的 {{ pages|length }} 个页面（共 {{ totals.pages }} 个）。</p>{% endif %}
+  {% else %}
+  <p class="empty">全站还没有人发布页面。</p>
+  {% endif %}
+</section>
+{% endblock %}

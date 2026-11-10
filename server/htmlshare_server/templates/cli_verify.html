@@ -1,0 +1,11 @@
+{% extends "_plain.html" %}
+{% set title = "授权命令行登录" %}
+{% block body %}
+<p class="muted">有一个 htmlshare 命令行客户端请求以你（{{ user_name }}）的身份登录。请核对终端里显示的代码和下面一致：</p>
+<p class="code-big">{{ user_code }}</p>
+<form method="post" action="/cli/verify">
+  <input type="hidden" name="user_code" value="{{ user_code }}" />
+  <button type="submit" class="btn primary">确认授权</button>
+</form>
+<p class="small">如果不是你本人刚刚运行的 <code>htmlshare login</code>，请直接关闭这个页面。</p>
+{% endblock %}

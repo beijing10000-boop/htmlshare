@@ -1,4 +1,4 @@
-"""SQLite 存储：页面元数据、权限名单、API Token、CLI 登录请求、访问日志。"""
+"""SQLite 存储：页面元数据、权限名单、API Token、CLI 登录请求、访问日志、访问申请、操作审计。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Iterator
 
 from .feishu import DirUser
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -96,6 +96,32 @@ CREATE TABLE IF NOT EXISTS upload_tickets (
     expires_days INTEGER,
     expires_at   INTEGER NOT NULL
 );
+-- v5：访问申请。没权限的人在「没有访问权限」页面上申请，发布者在控制台通过或拒绝；
+--     同一个人对同一个页面只有一行，被拒绝后可以再申请（回到 pending）
+CREATE TABLE IF NOT EXISTS access_requests (
+    id         INTEGER PRIMARY KEY,
+    page       TEXT NOT NULL,
+    open_id    TEXT NOT NULL,
+    reason     TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | rejected
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    UNIQUE (page, open_id)
+);
+-- v5：操作审计。actor 是 open_id（系统自动执行的记 'system'）；owner 是页面发布者，
+--     所以别人（申请人、管理员、系统）对我的页面做了什么，我也查得到
+CREATE TABLE IF NOT EXISTS audit_log (
+    id     INTEGER PRIMARY KEY,
+    at     INTEGER NOT NULL,
+    actor  TEXT NOT NULL,
+    action TEXT NOT NULL,
+    page   TEXT NOT NULL DEFAULT '',
+    owner  TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    via    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS audit_actor ON audit_log(actor, id);
+CREATE INDEX IF NOT EXISTS audit_owner ON audit_log(owner, id);
 """
 
 
@@ -136,7 +162,15 @@ class Database:
         path.parent.mkdir(parents=True, exist_ok=True)
         with self.conn() as c:
             c.execute("PRAGMA journal_mode=WAL")
+            before = c.execute("PRAGMA user_version").fetchone()[0]
             c.executescript(SCHEMA)
+            if 0 < before < 5:
+                # v5 之前删页面不清访问记录。现在访客名单会显示给发布者，旧页面留下的记录不能算到
+                # 后来同名的新页面头上：页面已经不在的、早于当前页面发布时间的，升级时清一次
+                c.execute(
+                    "DELETE FROM access_log WHERE NOT EXISTS "
+                    "(SELECT 1 FROM pages p WHERE p.name = access_log.page AND p.created_at <= access_log.at)"
+                )
             c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     @contextmanager
@@ -165,6 +199,13 @@ class Database:
             return ""
         return row["name"] or row["email"]
 
+    def name_by_email(self, email: str) -> str:
+        """按邮箱找人名（登录过的用户，或通讯录快照里的），找不到返回空串。"""
+        with self.conn() as c:
+            row = c.execute("SELECT name FROM users WHERE lower(email)=? AND name<>'' LIMIT 1", (email.lower(),)).fetchone()
+            row = row or c.execute("SELECT name FROM directory WHERE email=? LIMIT 1", (email.lower(),)).fetchone()
+        return row["name"] if row else ""
+
     # ---- pages ----
     def get_page(self, name: str) -> Page | None:
         with self.conn() as c:
@@ -189,19 +230,57 @@ class Database:
             c.execute("UPDATE pages SET expires_at=? WHERE name=?", (expires_at, name))
 
     def delete_page(self, name: str) -> None:
+        """连同名单、访问记录、访问申请一起删：页面名以后可能被别人用，旧记录不能算到新页面头上。"""
         with self.conn() as c:
             c.execute("DELETE FROM pages WHERE name=?", (name,))
             c.execute("DELETE FROM acl WHERE page=?", (name,))
+            c.execute("DELETE FROM access_log WHERE page=?", (name,))
+            c.execute("DELETE FROM access_requests WHERE page=?", (name,))
 
     def list_pages(self, owner: str) -> list[Page]:
         with self.conn() as c:
             rows = c.execute("SELECT * FROM pages WHERE owner=? ORDER BY updated_at DESC", (owner,)).fetchall()
         return [Page(**dict(r)) for r in rows]
 
-    def expired_pages(self, now: int) -> list[str]:
+    def all_pages(self, limit: int = 500) -> list[Page]:
         with self.conn() as c:
-            rows = c.execute("SELECT name FROM pages WHERE expires_at IS NOT NULL AND expires_at <= ?", (now,)).fetchall()
-        return [r["name"] for r in rows]
+            rows = c.execute("SELECT * FROM pages ORDER BY updated_at DESC, name LIMIT ?", (limit,)).fetchall()
+        return [Page(**dict(r)) for r in rows]
+
+    def acl_by_page(self, pages: list[str]) -> dict[str, list[AclEntry]]:
+        """一次取多个页面的名单（列表页用，免得每行查一次）。"""
+        out: dict[str, list[AclEntry]] = {p: [] for p in pages}
+        if not pages:
+            return out
+        marks = ",".join("?" * len(pages))
+        with self.conn() as c:
+            rows = c.execute(f"SELECT page, kind, value, label FROM acl WHERE page IN ({marks}) ORDER BY kind, label", pages).fetchall()
+        for r in rows:
+            out[r["page"]].append(AclEntry(r["kind"], r["value"], r["label"]))
+        return out
+
+    def site_totals(self) -> dict:
+        """全站计数，管理员的「全站页面」「系统状态」用。"""
+        with self.conn() as c:
+            pages = c.execute("SELECT COUNT(*) AS n, COUNT(DISTINCT owner) AS owners, COALESCE(SUM(size), 0) AS bytes FROM pages").fetchone()
+            one = lambda sql: c.execute(sql).fetchone()[0]  # noqa: E731
+            return {
+                "pages": pages["n"],
+                "owners": pages["owners"],
+                "bytes": pages["bytes"],
+                "users": one("SELECT COUNT(*) FROM users"),
+                "tokens": one("SELECT COUNT(*) FROM api_tokens"),
+                "directory": one("SELECT COUNT(*) FROM directory"),
+                "access_rows": one("SELECT COUNT(*) FROM access_log"),
+                "audit_rows": one("SELECT COUNT(*) FROM audit_log"),
+                "pending_requests": one("SELECT COUNT(*) FROM access_requests WHERE status='pending'"),
+            }
+
+    def expired_pages(self, now: int) -> list[tuple[str, str]]:
+        """已过期的页面 -> (页面名, 发布者)。"""
+        with self.conn() as c:
+            rows = c.execute("SELECT name, owner FROM pages WHERE expires_at IS NOT NULL AND expires_at <= ?", (now,)).fetchall()
+        return [(r["name"], r["owner"]) for r in rows]
 
     # ---- acl ----
     @staticmethod
@@ -356,6 +435,11 @@ class Database:
                 (owner,),
             ).fetchall()
 
+    def token_label(self, owner: str, token_id: int) -> str | None:
+        with self.conn() as c:
+            row = c.execute("SELECT label FROM api_tokens WHERE rowid=? AND owner=?", (token_id, owner)).fetchone()
+        return row["label"] if row else None
+
     def revoke_token_id(self, owner: str, token_id: int) -> bool:
         with self.conn() as c:
             return c.execute("DELETE FROM api_tokens WHERE rowid=? AND owner=?", (token_id, owner)).rowcount == 1
@@ -443,19 +527,180 @@ class Database:
 
     # ---- access log ----
     def log_access(self, page: str, open_id: str, allowed: bool) -> None:
+        now = int(time.time())
         with self.conn() as c:
-            c.execute(
-                "INSERT INTO access_log(page, open_id, at, allowed) VALUES(?,?,?,?)",
-                (page, open_id, int(time.time()), int(allowed)),
-            )
+            c.execute("INSERT INTO access_log(page, open_id, at, allowed) VALUES(?,?,?,?)", (page, open_id, now, int(allowed)))
+            if allowed:  # 打开成功了（比如按部门加进来的），他之前提的申请就不用再等人处理
+                c.execute(
+                    "UPDATE access_requests SET status='approved', decided_at=? WHERE page=? AND open_id=? AND status='pending'",
+                    (now, page, open_id),
+                )
 
-    def view_counts(self, pages: list[str]) -> dict[str, int]:
+    # 下面的统计都不算发布者本人：他关心的是别人看了没有，自己预览不算访问
+    def view_stats(self, pages: list[str]) -> dict[str, dict]:
+        """每个页面被打开的次数、人数、最近一次（只算放行的）。没人看过的页面不在结果里。"""
         if not pages:
             return {}
         marks = ",".join("?" * len(pages))
         with self.conn() as c:
             rows = c.execute(
-                f"SELECT page, COUNT(*) AS n FROM access_log WHERE allowed=1 AND page IN ({marks}) GROUP BY page",
+                f"SELECT a.page, COUNT(*) AS views, COUNT(DISTINCT a.open_id) AS visitors, MAX(a.at) AS last_at "
+                f"FROM access_log a JOIN pages p ON p.name = a.page "
+                f"WHERE a.allowed=1 AND a.open_id <> p.owner AND a.page IN ({marks}) GROUP BY a.page",
                 pages,
             ).fetchall()
-        return {r["page"]: r["n"] for r in rows}
+        return {r["page"]: {"views": r["views"], "visitors": r["visitors"], "last_at": r["last_at"]} for r in rows}
+
+    def view_counts(self, pages: list[str]) -> dict[str, int]:
+        return {name: s["views"] for name, s in self.view_stats(pages).items()}
+
+    @staticmethod
+    def _scope(owner: str | None, page: str | None) -> tuple[str, tuple]:
+        """访问统计的范围：某个人发布的全部页面、某一个页面，或全站（都不给）。"""
+        if page is not None:
+            return "a.page = ?", (page,)
+        if owner is not None:
+            return "p.owner = ?", (owner,)
+        return "1=1", ()
+
+    def access_summary(self, since: int = 0, owner: str | None = None, page: str | None = None) -> dict:
+        """since 之后：放行次数、访客数、被拒次数、被拒人数、最近一次放行。"""
+        where, args = self._scope(owner, page)
+        with self.conn() as c:
+            r = c.execute(
+                f"SELECT COALESCE(SUM(a.allowed), 0) AS views, "
+                f"COUNT(DISTINCT CASE WHEN a.allowed=1 THEN a.open_id END) AS visitors, "
+                f"COALESCE(SUM(1 - a.allowed), 0) AS denied, "
+                f"COUNT(DISTINCT CASE WHEN a.allowed=0 THEN a.open_id END) AS denied_people, "
+                f"MAX(CASE WHEN a.allowed=1 THEN a.at END) AS last_at "
+                f"FROM access_log a JOIN pages p ON p.name = a.page "
+                f"WHERE {where} AND a.open_id <> p.owner AND a.at >= ?",
+                (*args, since),
+            ).fetchone()
+        return dict(r)
+
+    def access_daily(self, since: int, owner: str | None = None, page: str | None = None) -> dict[str, dict]:
+        """按天（服务器本地时区）的放行次数和访客数 -> {'2026-11-03': {'views': 3, 'visitors': 2}}。"""
+        where, args = self._scope(owner, page)
+        with self.conn() as c:
+            rows = c.execute(
+                f"SELECT strftime('%Y-%m-%d', a.at, 'unixepoch', 'localtime') AS day, COUNT(*) AS views, "
+                f"COUNT(DISTINCT a.open_id) AS visitors "
+                f"FROM access_log a JOIN pages p ON p.name = a.page "
+                f"WHERE {where} AND a.allowed=1 AND a.open_id <> p.owner AND a.at >= ? GROUP BY day",
+                (*args, since),
+            ).fetchall()
+        return {r["day"]: {"views": r["views"], "visitors": r["visitors"]} for r in rows}
+
+    def recent_access(self, owner: str, limit: int = 10) -> list[sqlite3.Row]:
+        """我发布的页面最近被谁打开过（含被拒绝的）。"""
+        with self.conn() as c:
+            return c.execute(
+                "SELECT a.page, p.title, a.open_id, a.at, a.allowed FROM access_log a JOIN pages p ON p.name = a.page "
+                "WHERE p.owner = ? AND a.open_id <> p.owner ORDER BY a.at DESC, a.id DESC LIMIT ?",
+                (owner, limit),
+            ).fetchall()
+
+    def page_visitors(self, page: str, owner: str, limit: int = 200) -> list[sqlite3.Row]:
+        """一个页面的访客，每人一行：打开次数、被拒次数、最近一次及其结果。"""
+        with self.conn() as c:
+            return c.execute(
+                "SELECT open_id, SUM(allowed) AS views, SUM(1 - allowed) AS denied, MAX(at) AS last_at, "
+                "MAX(CASE WHEN allowed=1 THEN at END) AS last_ok, MAX(CASE WHEN allowed=0 THEN at END) AS last_denied "
+                "FROM access_log WHERE page = ? AND open_id <> ? GROUP BY open_id ORDER BY last_at DESC LIMIT ?",
+                (page, owner, limit),
+            ).fetchall()
+
+    # ---- access requests ----
+    def get_request(self, page: str, open_id: str) -> sqlite3.Row | None:
+        with self.conn() as c:
+            return c.execute("SELECT * FROM access_requests WHERE page=? AND open_id=?", (page, open_id)).fetchone()
+
+    def save_request(self, page: str, open_id: str, reason: str) -> None:
+        """新申请，或被拒绝后再次申请（回到待处理）。"""
+        with self.conn() as c:
+            c.execute(
+                "INSERT INTO access_requests(page, open_id, reason, status, created_at) VALUES(?,?,?,'pending',?) "
+                "ON CONFLICT(page, open_id) DO UPDATE SET reason=excluded.reason, status='pending', "
+                "created_at=excluded.created_at, decided_at=NULL",
+                (page, open_id, reason, int(time.time())),
+            )
+
+    def request_by_id(self, request_id: int) -> sqlite3.Row | None:
+        with self.conn() as c:
+            return c.execute(
+                "SELECT r.*, p.owner, p.title FROM access_requests r JOIN pages p ON p.name = r.page WHERE r.id=?",
+                (request_id,),
+            ).fetchone()
+
+    def requests_for_owner(self, owner: str, pending: bool, page: str | None = None, limit: int = 100) -> list[sqlite3.Row]:
+        """别人对我发布的页面提的申请：pending=True 待处理（先到的在前），False 已处理（新的在前）。"""
+        cond = "r.status = 'pending'" if pending else "r.status <> 'pending'"
+        order = "r.created_at, r.id" if pending else "r.decided_at DESC, r.id DESC"
+        args: tuple = (owner,)
+        if page is not None:
+            cond += " AND r.page = ?"
+            args += (page,)
+        with self.conn() as c:
+            return c.execute(
+                f"SELECT r.*, p.owner, p.title FROM access_requests r JOIN pages p ON p.name = r.page "
+                f"WHERE p.owner = ? AND {cond} ORDER BY {order} LIMIT ?",
+                (*args, limit),
+            ).fetchall()
+
+    def requests_by_user(self, open_id: str, limit: int = 50) -> list[sqlite3.Row]:
+        with self.conn() as c:
+            return c.execute(
+                "SELECT r.*, p.owner, p.title FROM access_requests r JOIN pages p ON p.name = r.page "
+                "WHERE r.open_id = ? ORDER BY r.created_at DESC, r.id DESC LIMIT ?",
+                (open_id, limit),
+            ).fetchall()
+
+    def pending_request_count(self, owner: str) -> int:
+        with self.conn() as c:
+            return c.execute(
+                "SELECT COUNT(*) FROM access_requests r JOIN pages p ON p.name = r.page WHERE p.owner=? AND r.status='pending'",
+                (owner,),
+            ).fetchone()[0]
+
+    def decide_request(self, request_id: int, status: str) -> bool:
+        """只有还在待处理的才能改；并发点两次只有一次成功。"""
+        with self.conn() as c:
+            cur = c.execute(
+                "UPDATE access_requests SET status=?, decided_at=? WHERE id=? AND status='pending'",
+                (status, int(time.time()), request_id),
+            )
+            return cur.rowcount == 1
+
+    def settle_requests(self, page: str, open_ids: set[str] | None) -> int:
+        """这些人已经能看了（名单里加了他，或者他自己打开成功了），待处理的申请直接算通过。None = 所有人。"""
+        if open_ids is not None and not open_ids:
+            return 0
+        sql = "UPDATE access_requests SET status='approved', decided_at=? WHERE page=? AND status='pending'"
+        args: list = [int(time.time()), page]
+        if open_ids is not None:
+            sql += f" AND open_id IN ({','.join('?' * len(open_ids))})"
+            args += sorted(open_ids)
+        with self.conn() as c:
+            return c.execute(sql, args).rowcount
+
+    # ---- audit log ----
+    def add_audit(self, actor: str, action: str, page: str = "", owner: str = "", detail: str = "", via: str = "") -> None:
+        with self.conn() as c:
+            c.execute(
+                "INSERT INTO audit_log(at, actor, action, page, owner, detail, via) VALUES(?,?,?,?,?,?,?)",
+                (int(time.time()), actor, action, page, owner, detail[:500], via),
+            )
+
+    def list_audit(self, viewer: str | None, before: int | None = None, limit: int = 100) -> list[sqlite3.Row]:
+        """viewer 给了就只看和他有关的（他做的，或别人对他的页面做的）；None = 全站（管理员）。"""
+        cond, args = [], []
+        if viewer is not None:
+            cond.append("(actor = ? OR owner = ?)")
+            args += [viewer, viewer]
+        if before is not None:
+            cond.append("id < ?")
+            args.append(before)
+        where = f"WHERE {' AND '.join(cond)}" if cond else ""
+        with self.conn() as c:
+            return c.execute(f"SELECT * FROM audit_log {where} ORDER BY id DESC LIMIT ?", (*args, limit)).fetchall()

@@ -1,0 +1,180 @@
+{% extends "_base.html" %}
+{% from "_macros.html" import expiry, trend, decide, upload_dialog %}
+{% set title = "页面设置 · " ~ p.name %}
+{% set heading = p.title or p.name %}
+{% set section = "我发布的" %}
+{% set crumb_href = "/me/pages" %}
+{% set here = "/me/pages/" ~ p.name %}
+
+{% macro act(action, label, cls="btn small", fields={}, confirm="", message="", confirm_text="确认", danger=false) %}
+<form method="post" action="{{ here }}" class="inline"{% if confirm %} data-confirm="{{ confirm }}" data-confirm-message="{{ message }}" data-confirm-text="{{ confirm_text }}"{% endif %}{% if danger %} data-danger{% endif %}>
+  <input type="hidden" name="action" value="{{ action }}" />
+  {% for k, v in fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}" />{% endfor %}
+  <button type="submit" class="{{ cls }}"{% if cls == "x" %} aria-label="{{ label }}" title="{{ label }}"{% endif %}>{{ "×" if cls == "x" else label }}</button>
+</form>
+{% endmacro %}
+
+{% block actions %}
+<a class="btn" href="/{{ p.name }}.html" target="_blank" rel="noopener">{{ icon("open") }}打开页面</a>
+<button class="btn" type="button" data-copy="{{ p.url }}">{{ icon("copy") }}复制链接</button>
+{% endblock %}
+
+{% block content %}
+<div class="page-intro">
+  <p><span class="mono">{{ p.url }}</span> · {{ p.size|size }} · {{ p.created_ts|ts }} 发布{% if p.updated_ts != p.created_ts %}，{{ p.updated_ts|ts }} 更新{% endif %}</p>
+</div>
+
+{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
+{% if notice %}<p class="notice success" role="status">{{ notice }}</p>{% endif %}
+{% for u in unresolved %}
+<div class="notice warn" role="status">
+  <b>{{ u.input }}</b>：{{ u.reason }}
+  {% if u.candidates %}
+  <div class="actions candidates">
+    {% for c in u.candidates %}{{ act("add", "加上 " ~ c.label, fields={"viewers": c.value}) }}{% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+
+<div class="stats">
+  <div class="stat">
+    <div class="label">打开次数</div>
+    <div class="value">{{ p.total.views }}</div>
+    <div class="hint">近 7 天 {{ p.week.views }} 次</div>
+  </div>
+  <div class="stat">
+    <div class="label">访客</div>
+    <div class="value">{{ p.total.visitors }}</div>
+    <div class="hint">不算你自己</div>
+  </div>
+  <div class="stat{{ ' attention' if p.pending }}">
+    <div class="label">被拒绝的人</div>
+    <div class="value">{{ p.total.denied_people }}</div>
+    <div class="hint">{{ p.pending|length ~ " 人已提交访问申请" if p.pending else "不在可见范围里的访问" }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">最近访问</div>
+    <div class="value small-value">{{ p.total.last_at|ago("还没人看") }}</div>
+    <div class="hint">{{ p.total.last_at|ts("发出链接后这里会更新") }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">过期时间</div>
+    <div class="value small-value">{{ p.expires_ts|left }}</div>
+    <div class="hint">{{ p.expires_ts|ts("不会自动删除") }}</div>
+  </div>
+</div>
+
+{% if p.pending %}
+<section class="panel" id="requests">
+  <div class="section-head">
+    <div><h2>访问申请</h2><p>通过后对方会被加进可见范围</p></div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>申请人</th><th>理由</th><th>申请时间</th><th></th></tr></thead>
+      <tbody>
+        {% for r in p.pending %}
+        <tr>
+          <td>{{ r.name }}</td>
+          <td>{{ r.reason or "没有填写理由" }}</td>
+          <td title="{{ r.created_ts|ts }}">{{ r.created_ts|ago }}</td>
+          <td>{{ decide(r, here) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<div class="grid2">
+  <section class="panel" id="viewers">
+    <div class="section-head">
+      <div><h2>谁能看</h2><p>你自己总是能看。部门包含它的所有子部门。</p></div>
+    </div>
+    <div class="viewer-tags">
+      {% for v in p.viewers %}
+      <span class="viewer-tag{{ ' all' if v.kind == 'all' }}">{{ v.label }}{{ act("remove", "移除 " ~ v.label, cls="x", fields={"value": v.value}) }}</span>
+      {% else %}
+      <span class="tag">仅自己可见</span>
+      {% endfor %}
+    </div>
+    <form method="post" action="{{ here }}" class="add-viewer">
+      <input type="hidden" name="action" value="add" />
+      <input name="viewers" list="viewer-suggest" data-suggest autocomplete="off" required
+        placeholder="姓名、飞书邮箱、手机号或部门，多个用逗号分隔" aria-label="添加可见人" />
+      <datalist id="viewer-suggest"></datalist>
+      <button type="submit" class="btn primary">添加</button>
+    </form>
+    <p class="help">输入时会联想同事和部门；重名的人、同名的部门会列出候选让你选。</p>
+    <div class="actions quick">
+      {% if p.scope != "all" %}{{ act("add", "设为全员可见", cls="btn", fields={"viewers": "all"}, confirm="把这个页面设为全员可见？", message="本企业任何人用飞书登录后都能打开。原来的名单会保留，之后取消全员时还在。", confirm_text="设为全员可见") }}{% endif %}
+      {% if p.viewers %}{{ act("set_private", "改为仅自己可见", cls="btn", confirm="移除全部可见人？", message="名单会被清空，之后只有你自己能打开「" ~ (p.title or p.name) ~ "」。", confirm_text="改为仅自己可见", danger=true) }}{% endif %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div><h2>访问趋势</h2><p>最近 14 天每天被打开的次数</p></div>
+    </div>
+    {{ trend(p.daily, "最近 14 天还没有人打开过这个页面。把链接发给可见范围里的同事吧。") }}
+  </section>
+</div>
+
+<section class="panel" id="visitors">
+  <div class="section-head">
+    <div><h2>访客</h2><p>谁打开过、打开了几次；被拒绝的人可以直接加进可见范围</p></div>
+  </div>
+  {% if p.people %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>访客</th><th>打开次数</th><th>被拒次数</th><th>最近一次</th><th>现在</th><th></th></tr></thead>
+      <tbody>
+        {% for v in p.people %}
+        <tr>
+          <td>{{ v.name }}</td>
+          <td>{{ v.views }}</td>
+          <td>{{ v.denied }}</td>
+          <td title="{{ v.last_ts|ts }}">{{ v.last_ts|ago }}</td>
+          <td>{% if v.blocked %}<span class="status warn">被拒绝</span>{% else %}<span class="status ok">能打开</span>{% endif %}</td>
+          <td>{% if v.blocked %}{{ act("add", "加入可见范围", fields={"viewers": v.open_id}) }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">还没有人打开过这个页面（你自己的访问不算）。</p>
+  {% endif %}
+</section>
+
+<section class="panel" id="manage">
+  <div class="section-head">
+    <div><h2>内容与期限</h2><p>链接保持不变</p></div>
+  </div>
+  <div class="row-item">
+    <div><strong>更新内容</strong><p>上传新的 HTML 文件覆盖现在的内容；可见范围和过期时间不变。也可以让 AI 工具用同一个页面名再发布一次。</p></div>
+    <button class="btn" type="button" data-open-dialog="upload-dialog">{{ icon("upload") }}上传新版本</button>
+  </div>
+  <div class="row-item">
+    <div><strong>过期时间</strong><p>现在：{{ expiry(p.expires_ts, p.expiring) }}。到期后页面自动删除，链接失效。</p></div>
+    <form method="post" action="{{ here }}" class="inline expiry-form">
+      <input type="hidden" name="action" value="expiry" />
+      <select name="days" aria-label="新的过期时间">
+        {% for d in expiry_choices %}<option value="{{ d }}"{{ " selected" if d == 30 }}>{{ d }} 天后</option>{% endfor %}
+        <option value="0">永不过期</option>
+      </select>
+      <button type="submit" class="btn">修改</button>
+    </form>
+  </div>
+  <div class="row-item">
+    <div><strong>删除页面</strong><p>删除后链接立即失效，访问记录一并清除，不能恢复。</p></div>
+    {{ act("delete", "删除这个页面", cls="btn danger", confirm="删除「" ~ (p.title or p.name) ~ "」？", message="链接 " ~ p.url ~ " 会立即失效，访问记录一并清除，不能恢复。", confirm_text="删除", danger=true) }}
+  </div>
+</section>
+{% endblock %}
+
+{% block dialogs %}
+{{ upload_dialog(max_mb, default_days, expiry_choices, fixed=p.name) }}
+{% endblock %}

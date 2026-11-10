@@ -1,0 +1,401 @@
+/* HTML 分享站的页面样式。令牌、外壳和通用组件在 ui-kit.css（与运维控制台共用，不要在那里改）。 */
+
+/* ui-kit 的导航项和按钮按 <button> 设计；这里的页面是服务端渲染，用的是链接 */
+a.nav-link:hover,
+a.stat:hover {
+  text-decoration: none;
+}
+.nav-badge {
+  min-width: 20px;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+.nav-link.active .nav-badge {
+  background: #ffffff38;
+  color: inherit;
+}
+.breadcrumb a {
+  color: inherit;
+}
+.segmented > a {
+  flex-shrink: 0;
+  min-height: 30px;
+  padding: 5px 18px;
+  border-radius: 999px;
+  color: var(--text-2);
+  font: 500 13px/20px var(--font);
+}
+.segmented > a:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+.segmented > a.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow:
+    0 1px 3px #0000001f,
+    0 0 0 0.5px #0000000a;
+}
+:root[data-theme="dark"] .segmented > a.active {
+  background: #3a3a3e;
+}
+.page-intro .segmented {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+/* 概览 */
+.hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  margin-bottom: 18px;
+  padding: 28px 32px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(600px 240px at 100% 0%, var(--accent-soft), transparent 70%),
+    radial-gradient(500px 220px at 0% 100%, var(--indigo-soft), transparent 70%),
+    var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.hero h2 {
+  margin: 8px 0 6px;
+  font-size: 26px;
+  letter-spacing: -0.025em;
+}
+.hero p {
+  max-width: 640px;
+  margin: 0;
+  color: var(--text-2);
+}
+.hero .actions {
+  flex-shrink: 0;
+}
+a.stat {
+  color: inherit;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+a.stat:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-pop);
+}
+.stat.attention .value {
+  color: var(--red);
+}
+.stat .small-value {
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+/* 一行一件事：左边是对象和说明，右边是数字或操作 */
+.row-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.row-item:last-child {
+  border-bottom: 0;
+}
+.row-item > div:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.row-item p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.row-item > :not(:first-child) {
+  flex-shrink: 0;
+}
+.row-meta {
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.row-meta strong {
+  font: 600 15px var(--font-display);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.row-meta small {
+  display: block;
+  color: var(--text-3);
+}
+
+/* 可见范围 */
+.tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.tags .tag {
+  display: inline-block;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.viewer-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.viewer-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 4px 3px 12px;
+  border-radius: 999px;
+  background: var(--fill-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.viewer-tag.all {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.viewer-tag button.x {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-3);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.viewer-tag button.x:hover {
+  background: var(--red-soft);
+  color: var(--red);
+}
+form.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.add-viewer {
+  display: flex;
+  gap: 8px;
+}
+.add-viewer input {
+  flex: 1;
+}
+.actions.quick {
+  margin-top: 16px;
+}
+.actions.candidates {
+  margin-top: 8px;
+}
+.actions.center {
+  justify-content: center;
+  margin-top: 16px;
+}
+.expiry-form select {
+  width: auto;
+  min-width: 130px;
+}
+.notice .btn.small {
+  background: var(--surface);
+}
+
+/* 复制时用的临时文本框，放到屏幕外 */
+.offscreen {
+  position: fixed;
+  top: -1000px;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  opacity: 0;
+}
+
+/* 表格里的小东西 */
+.toolbar .chips {
+  margin: 0;
+}
+.nowrap {
+  white-space: nowrap;
+}
+td .actions {
+  flex-wrap: nowrap;
+}
+.empty-state h2 {
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.empty-state p {
+  max-width: 560px;
+  margin: 0 auto 6px;
+}
+.plain-list {
+  margin: 0 0 4px;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+/* 访问趋势：单一序列的柱状图，柱子用强调色，网格和坐标文字退后 */
+.chart {
+  position: relative;
+  height: 200px;
+}
+.chart svg {
+  display: block;
+  overflow: visible;
+}
+.chart .grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.chart .tick {
+  fill: var(--text-3);
+  font: 11px var(--font);
+  font-variant-numeric: tabular-nums;
+}
+.chart .peak {
+  fill: var(--text-2);
+  font: 600 11px var(--font);
+}
+.chart .bar {
+  fill: var(--accent);
+  transition: fill 0.12s;
+}
+.chart .bar.on {
+  fill: var(--accent-hover);
+}
+.chart .hit {
+  fill: transparent;
+  outline: none;
+}
+.chart .hit:focus-visible {
+  stroke: var(--focus);
+  stroke-width: 2;
+}
+.chart-tip {
+  position: absolute;
+  z-index: 5;
+  padding: 7px 11px;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 8px));
+}
+.chart-tip strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.chart-data {
+  margin-top: 6px;
+}
+.chart-data > summary {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+/* 接入 */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.steps li {
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  background: var(--fill-2);
+  counter-increment: step;
+}
+.steps li::before {
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-bottom: 10px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+.steps p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+details > summary .muted {
+  font-size: 12px;
+}
+details > pre,
+details > p {
+  margin-bottom: 12px;
+}
+
+/* 独立提示页（登录、没有权限、命令行授权） */
+.login-card form {
+  margin: 20px 0 0;
+  text-align: left;
+}
+.login-card form .btn {
+  margin: 16px 0 12px;
+}
+.login-card > .btn {
+  margin: 22px 0 12px;
+}
+.request-form input + label {
+  margin-top: 12px;
+}
+.code-big {
+  margin: 18px 0 0;
+  font: 600 30px/1.2 var(--mono);
+  letter-spacing: 0.14em;
+}
+
+@media (max-width: 860px) {
+  .hero {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 22px 18px;
+  }
+  .steps {
+    grid-template-columns: 1fr;
+  }
+  .row-item {
+    flex-wrap: wrap;
+  }
+  .add-viewer {
+    flex-wrap: wrap;
+  }
+}

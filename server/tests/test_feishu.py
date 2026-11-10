@@ -184,3 +184,42 @@ def test_user_department_ids(tmp_path):
     fs.http.headers["x-case"] = "no-field"
     with pytest.raises(FeishuError, match="contact:user.department:readonly"):
         fs.user_department_ids("ou_1")
+
+
+def test_send_text(tmp_path):
+    seen = []
+
+    def handler(req: httpx.Request):
+        if req.url.path.endswith("/tenant_access_token/internal"):
+            return _tenant_ok(req)
+        seen.append(req)
+        if json.loads(req.content)["receive_id"] == "ou_out_of_range":
+            return httpx.Response(400, json={"code": 230013, "msg": "Bot has NO availability to this user"})
+        return httpx.Response(200, json={"code": 0, "data": {"message_id": "om_1"}})
+
+    fs = make_client(tmp_path, handler)
+    fs.send_text("ou_1", "张三 申请查看「周报」")
+    req = seen[0]
+    assert req.url.path == "/open-apis/im/v1/messages" and req.url.params["receive_id_type"] == "open_id"
+    assert req.headers["authorization"].startswith("Bearer ")
+    body = json.loads(req.content)
+    assert body["receive_id"] == "ou_1" and body["msg_type"] == "text"
+    assert json.loads(body["content"]) == {"text": "张三 申请查看「周报」"}  # content 是 JSON 字符串，不是对象
+    with pytest.raises(FeishuError, match="发送飞书消息失败：code=230013"):
+        fs.send_text("ou_out_of_range", "x")
+
+
+def test_admins_and_notify_from_env(tmp_path, monkeypatch):
+    from htmlshare_server.config import Settings
+
+    monkeypatch.setenv("HTMLSHARE_PUBLIC_URL", "http://share.example.com")
+    monkeypatch.setenv("HTMLSHARE_DEV_FAKE_LOGIN", "1")
+    monkeypatch.setenv("HTMLSHARE_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("HTMLSHARE_ADMINS", raising=False)
+    monkeypatch.delenv("HTMLSHARE_NOTIFY", raising=False)
+    s = Settings.from_env()
+    assert s.admins == () and s.notify is False
+    monkeypatch.setenv("HTMLSHARE_ADMINS", " ou_Abc, Zhang.San@Example.com；ou_abc\nli.si@example.com ")
+    monkeypatch.setenv("HTMLSHARE_NOTIFY", "1")
+    s = Settings.from_env()
+    assert s.admins == ("ou_abc", "zhang.san@example.com", "li.si@example.com") and s.notify is True

@@ -1,0 +1,89 @@
+{% extends "_base.html" %}
+{% set title = "接入 AI 工具" %}
+{% set section = "接入" %}
+
+{% block content %}
+<section class="panel">
+  <div class="section-head">
+    <div><h2>让 AI 工具直接发布</h2><p>不用安装任何软件，Claude Code、Cursor、Codex 等支持远程 MCP 的工具都可以</p></div>
+    <form method="post" action="/me/connect"><button type="submit" class="btn primary">生成接入说明</button></form>
+  </div>
+  <ol class="steps">
+    <li><strong>生成接入说明</strong><p>点右上方的按钮，会得到一段话，里面有分享站地址和一个只属于你的凭证。</p></li>
+    <li><strong>发给你的 AI 工具</strong><p>把那段话完整复制给 AI，它会自己完成配置，并确认连上的是你的身份。</p></li>
+    <li><strong>直接说要发布什么</strong><p>例如「把这个报告发布出去，给张三和技术中心看」。可见人可以说姓名、飞书邮箱、手机号、部门或全员。</p></li>
+  </ol>
+  <p class="help">ChatGPT 网页版的连接器、Claude Desktop 的远程连接都从厂商云端访问，连不到公司内网：前者请改用 Codex，后者用下面的命令行客户端。</p>
+</section>
+
+<section class="panel">
+  <div class="section-head">
+    <div><h2>接入后 AI 能做什么</h2><p>都以你的身份执行，只能管理你自己发布的页面</p></div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>你可以这样说</th><th>AI 用到的工具</th></tr></thead>
+      <tbody>
+        <tr><td>把 report.html 发布出去，给张三和技术中心看，30 天后过期</td><td class="mono">prepare_upload / publish_html</td></tr>
+        <tr><td>把周报的可见范围加上运维部，去掉李四</td><td class="mono">update_viewers</td></tr>
+        <tr><td>谁看过我的周报？有没有人被拒绝或者在申请？</td><td class="mono">page_stats</td></tr>
+        <tr><td>我发布过哪些页面？别人分享了什么给我？</td><td class="mono">list_my_pages / list_shared_with_me</td></tr>
+        <tr><td>公司里叫张三的有哪几个，分别在哪个部门</td><td class="mono">find_user</td></tr>
+        <tr><td>把上个月的测试页面删掉</td><td class="mono">delete_page</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel" id="tokens">
+  <div class="section-head">
+    <div><h2>我的接入凭证</h2><p>每次生成接入说明或命令行登录都会产生一个凭证，它等同于你的身份</p></div>
+  </div>
+  {% if tokens %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>名称</th><th>创建时间</th><th>最近使用</th><th></th></tr></thead>
+      <tbody>
+        {% for t in tokens %}
+        <tr>
+          <td>{{ t.label or "（未命名）" }}</td>
+          <td>{{ t.created_at|ts }}</td>
+          <td title="{{ t.last_used_at|ts }}">{{ t.last_used_at|ago("从未使用") }}</td>
+          <td>
+            <form method="post" action="/me/tokens/{{ t.id }}/revoke" class="inline"
+              data-confirm="撤销凭证「{{ t.label or '未命名' }}」？" data-confirm-message="用这个凭证接入的 AI 工具或命令行会立刻连不上，需要重新接入。不能恢复。" data-confirm-text="撤销" data-danger>
+              <button type="submit" class="btn small danger">撤销</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">还没有凭证。生成接入说明后这里会多出一条；不用的、可能泄露的，随时在这里撤销。</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <details>
+    <summary><strong>命令行客户端（可选）</strong><span class="muted">Claude Desktop 等不支持远程 MCP 的工具，或者习惯用命令行</span></summary>
+    <p>需要 Python 3.10 以上：</p>
+    <pre>{{ install_cmd }}
+htmlshare login --server {{ public_url }}
+claude mcp add --scope user htmlshare -- htmlshare mcp</pre>
+    <p class="help">没法打开浏览器的环境（远程服务器、CI）：生成一个凭证，设成环境变量 HTMLSHARE_TOKEN 和 HTMLSHARE_SERVER。</p>
+    <form method="post" action="/me/tokens"><button type="submit" class="btn">生成命令行凭证</button></form>
+  </details>
+</section>
+
+<section class="panel">
+  <div class="section-head">
+    <div><h2>我的身份</h2><p>配置管理员（HTMLSHARE_ADMINS）或排查权限问题时用得到</p></div>
+  </div>
+  <div class="row-item">
+    <div><strong>{{ shell.user_name }}</strong><p class="mono">{{ open_id }}</p></div>
+    <button class="btn small" type="button" data-copy="{{ open_id }}">复制 open_id</button>
+  </div>
+</section>
+{% endblock %}

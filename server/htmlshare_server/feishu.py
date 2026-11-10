@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 import time
 from dataclasses import dataclass
@@ -208,6 +209,18 @@ class FeishuClient:
                 return out
             params["page_token"] = data["page_token"]
 
+    def send_text(self, open_id: str, text: str) -> None:
+        """以应用机器人的身份给一个人发文本消息（应用要开机器人能力和 im:message:send_as_bot）。"""
+        _json(
+            self.http.post(
+                f"{self.s.feishu_open_base}/open-apis/im/v1/messages",
+                params={"receive_id_type": "open_id"},
+                headers={"Authorization": f"Bearer {self._tenant_access_token()}"},
+                json={"receive_id": open_id, "msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)},
+            ),
+            "发送飞书消息",
+        )
+
 
 DEV_DEPARTMENTS = [
     Dept("od-dev-tech", "技术中心", "0"),
@@ -253,6 +266,7 @@ class FakeFeishu:
         self.people = people
         self._emails: dict[str, str] = {}
         self.calls: dict[str, int] = {"list_departments": 0, "user_department_ids": 0, "list_department_users": 0}
+        self.sent: list[tuple[str, str]] = []  # send_text 发出的 (open_id, 文本)，测试里核对
 
     @staticmethod
     def open_id_for(key: str) -> str:
@@ -294,3 +308,6 @@ class FakeFeishu:
             elif key in self.directory:
                 out[key] = self.directory[key]
         return out
+
+    def send_text(self, open_id: str, text: str) -> None:
+        self.sent.append((open_id, text))

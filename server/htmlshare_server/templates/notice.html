@@ -1,0 +1,13 @@
+{% extends "_base.html" %}
+{# 控制台里的整页提示：没有权限、对象不存在等。说明哪里不行、下一步去哪。 #}
+{% set section = section or "工作台" %}
+
+{% block content %}
+<section class="panel">
+  <div class="empty-state">
+    <h2>{{ title }}</h2>
+    <p>{{ text }}</p>
+    <div class="actions center"><a class="btn primary" href="{{ back[1] }}">{{ back[0] }}</a></div>
+  </div>
+</section>
+{% endblock %}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,11 @@ def _int(name: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _list(name: str) -> tuple[str, ...]:
+    """逗号 / 分号 / 空白分隔的列表，统一小写（open_id 和邮箱都不区分大小写）。"""
+    return tuple(dict.fromkeys(v.lower() for v in re.split(r"[,;，；\s]+", os.environ.get(name, "")) if v))
+
+
 @dataclass(frozen=True)
 class Settings:
     public_url: str
@@ -48,6 +54,10 @@ class Settings:
     client_dist: Path = Path("/app/client-dist")
     directory_sync: bool = True
     directory_sync_hours: int = 6
+    # 管理员（open_id 或飞书邮箱，小写）：能看全站页面、系统状态和全站审计，能下线任何页面；看不了页面内容
+    admins: tuple[str, ...] = ()
+    # 访问申请有动静时用飞书机器人发消息（应用要开机器人能力和 im:message:send_as_bot）
+    notify: bool = False
     dev_fake_login: bool = False
 
     @property
@@ -93,5 +103,7 @@ class Settings:
             client_dist=Path(os.environ.get("HTMLSHARE_CLIENT_DIST", "/app/client-dist")),
             directory_sync=_bool("HTMLSHARE_DIRECTORY_SYNC", True),
             directory_sync_hours=_int("HTMLSHARE_DIRECTORY_SYNC_HOURS", 6),
+            admins=_list("HTMLSHARE_ADMINS"),
+            notify=_bool("HTMLSHARE_NOTIFY"),
             dev_fake_login=dev,
         )

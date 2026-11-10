@@ -1,0 +1,54 @@
+{% extends "_base.html" %}
+{% set title = "操作审计" %}
+{% set section = "治理" %}
+
+{% block content %}
+<div class="page-intro">
+  <p>{% if everyone %}全站的操作记录。{% else %}你做过的操作，以及别人对你发布的页面做的操作（申请访问、管理员下线、到期清理）。{% endif %}谁打开过页面在各页面的「访客」里看。</p>
+  {% if shell.is_admin %}
+  <div class="segmented" role="group" aria-label="范围">
+    <a href="/audit"{% if not everyone %} class="active" aria-current="true"{% endif %}>和我有关</a>
+    <a href="/audit?scope=all"{% if everyone %} class="active" aria-current="true"{% endif %}>全站</a>
+  </div>
+  {% endif %}
+</div>
+
+<section class="panel">
+  {% if rows %}
+  <div class="toolbar">
+    <input type="search" data-filter-input="audit-table" placeholder="搜索操作人、页面、详情" aria-label="搜索操作记录" />
+    <div class="chips" data-filter-chips="audit-table" role="group" aria-label="按类型筛选">
+      <button type="button" class="category-chip active" data-chip="">全部</button>
+      {% for key, label in groups.items() %}<button type="button" class="category-chip" data-chip="{{ key }}">{{ label }}</button>{% endfor %}
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table id="audit-table">
+      <thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>页面</th><th>详情</th><th>来源</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr data-tags="{{ r.group }}">
+          <td class="nowrap">{{ r.at|ts }}</td>
+          <td class="nowrap">{{ r.actor }}</td>
+          <td><span class="tag">{{ r.action }}</span></td>
+          <td>{% if r.page %}<span class="mono">{{ r.page }}</span>{% if r.owner %}<small>发布者 {{ r.owner }}</small>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td>{{ r.detail or "—" }}</td>
+          <td class="nowrap">{{ r.via or "—" }}</td>
+        </tr>
+        {% endfor %}
+        <tr data-empty hidden><td colspan="6" class="empty">这一页里没有符合条件的记录，换个关键字或类型。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    <span>每页 {{ limit }} 条，新的在前；搜索和筛选只作用于当前这一页</span>
+    <span class="actions">
+      {% if before %}<a class="btn small" href="/audit{{ '?scope=all' if everyone }}">回到最新</a>{% endif %}
+      {% if older %}<a class="btn small" href="/audit?{{ 'scope=all&' if everyone }}before={{ older }}">更早的记录</a>{% endif %}
+    </span>
+  </div>
+  {% else %}
+  <p class="empty">{{ "没有更早的记录了。" if before else "还没有操作记录。发布页面、改可见范围、生成凭证之后这里会有记录。" }}</p>
+  {% endif %}
+</section>
+{% endblock %}

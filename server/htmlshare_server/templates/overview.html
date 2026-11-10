@@ -1,0 +1,157 @@
+{% extends "_base.html" %}
+{% from "_macros.html" import viewers, expiry, trend, decide %}
+{% set title = "概览" %}
+{% set section = "工作台" %}
+
+{% block content %}
+<section class="hero">
+  <div>
+    <div class="eyebrow">工作台</div>
+    <h2>{{ shell.user_name }}，你好</h2>
+    {% if o.pages %}
+    <p>你发布了 {{ o.pages|length }} 个页面，最近 7 天被打开 {{ o.week.views }} 次。让 AI 工具把报告发布出来，或者直接上传一个 HTML 文件。</p>
+    {% else %}
+    <p>把 AI 生成的 HTML 报告发布成内网链接：指定谁能看，对方用飞书登录后才能打开。先接入你的 AI 工具，或者直接上传一个 HTML 文件。</p>
+    {% endif %}
+  </div>
+  <div class="actions">
+    <a class="btn primary" href="/connect">接入 AI 工具</a>
+    <a class="btn" href="/me/pages#upload">{{ icon("upload") }}上传 HTML</a>
+  </div>
+</section>
+
+<div class="stats">
+  <a class="stat" href="/me/pages">
+    <div class="label">我发布的页面</div>
+    <div class="value">{{ o.pages|length }}</div>
+    <div class="hint">{{ o.all_count }} 个全员可见</div>
+  </a>
+  <a class="stat" href="/shared">
+    <div class="label">分享给我的</div>
+    <div class="value">{{ o.shared|length }}</div>
+    <div class="hint">别人发布、你能打开</div>
+  </a>
+  <div class="stat">
+    <div class="label">近 7 天被打开</div>
+    <div class="value">{{ o.week.views }}</div>
+    <div class="hint">{{ o.week.visitors }} 位访客{% if o.week.denied %} · {{ o.week.denied_people }} 人被拒绝{% endif %}</div>
+  </div>
+  <a class="stat{{ ' attention' if o.pending }}" href="/requests">
+    <div class="label">待处理的访问申请</div>
+    <div class="value">{{ o.pending|length }}</div>
+    <div class="hint">{{ "等你通过或拒绝" if o.pending else "没有人在等" }}</div>
+  </a>
+  <a class="stat" href="/me/pages?show=expiring">
+    <div class="label">7 天内到期</div>
+    <div class="value">{{ o.expiring|length }}</div>
+    <div class="hint">到期后链接失效</div>
+  </a>
+</div>
+
+{% if o.dept_error %}<p class="notice warn">{{ o.dept_error }}</p>{% endif %}
+
+<div class="grid2">
+  <section class="panel">
+    <div class="section-head">
+      <div><h2>访问趋势</h2><p>最近 14 天，别人打开你发布的页面的次数（不算你自己）</p></div>
+    </div>
+    {{ trend(o.daily, "最近 14 天还没有人打开过你发布的页面。") }}
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div><h2>待处理</h2><p>访问申请和快到期的页面</p></div>
+    </div>
+    {% if not o.pending and not o.expiring %}
+    <p class="empty">没有需要处理的事。有人申请访问、或者页面 7 天内到期时会出现在这里。</p>
+    {% endif %}
+    {% for r in o.pending[:4] %}
+    <div class="row-item">
+      <div>
+        <strong>{{ r.name }}</strong> 申请查看 <a href="/me/pages/{{ r.page }}">{{ r.title or r.page }}</a>
+        <p>{{ r.reason or "没有填写理由" }} · {{ r.created_ts|ago }}</p>
+      </div>
+      {{ decide(r, "/") }}
+    </div>
+    {% endfor %}
+    {% if o.pending|length > 4 %}<p class="small muted"><a href="/requests">还有 {{ o.pending|length - 4 }} 个申请</a></p>{% endif %}
+    {% for p in o.expiring[:4] %}
+    <div class="row-item">
+      <div>
+        <a href="/me/pages/{{ p.name }}">{{ p.title or p.name }}</a> <span class="tag warn">{{ p.expires_ts|left }}</span>
+        <p>{{ p.expires_ts|ts }} 过期，过期后自动删除</p>
+      </div>
+      <form method="post" action="/me/pages/{{ p.name }}" class="inline">
+        <input type="hidden" name="action" value="expiry" /><input type="hidden" name="days" value="{{ renew_days }}" />
+        <input type="hidden" name="next" value="/" />
+        <button type="submit" class="btn small">续 {{ renew_days }} 天</button>
+      </form>
+    </div>
+    {% endfor %}
+    {% if o.expiring|length > 4 %}<p class="small muted"><a href="/me/pages?show=expiring">还有 {{ o.expiring|length - 4 }} 个页面快到期</a></p>{% endif %}
+  </section>
+</div>
+
+<div class="grid2">
+  <section class="panel">
+    <div class="section-head">
+      <div><h2>我发布的页面</h2><p>最近更新的 5 个</p></div>
+      <a class="btn small" href="/me/pages">全部 {{ o.pages|length }} 个</a>
+    </div>
+    {% for p in o.pages[:5] %}
+    <div class="row-item">
+      <div>
+        <a class="cell-title" href="/me/pages/{{ p.name }}">{{ p.title or p.name }}</a>
+        <p>{{ viewers(p.viewers, 2) }}</p>
+      </div>
+      <div class="row-meta"><strong>{{ p.views }}</strong> 次打开<small>{{ p.updated_ts|ago }}更新</small></div>
+    </div>
+    {% else %}
+    <p class="empty">还没有发布过页面。接入 AI 工具后对它说「把这个报告发布出去，给张三看」，或者<a href="/me/pages#upload">上传一个 HTML 文件</a>。</p>
+    {% endfor %}
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div><h2>分享给我的页面</h2><p>最近更新的 5 个</p></div>
+      <a class="btn small" href="/shared">全部 {{ o.shared|length }} 个</a>
+    </div>
+    {% for p in o.shared[:5] %}
+    <div class="row-item">
+      <div>
+        <a class="cell-title" href="/{{ p.name }}.html" target="_blank" rel="noopener">{{ p.title or p.name }}</a>
+        <p>{{ p.owner_name or "—" }} · <span class="tag{{ ' info' if p.via_kind == 'all' }}">{{ p.via }}</span></p>
+      </div>
+      <div class="row-meta"><small>{{ p.updated_ts|ago }}更新</small></div>
+    </div>
+    {% else %}
+    <p class="empty">还没有人分享页面给你。别人发布时把你、你所在的部门或全员加进可见范围，页面就会出现在这里。</p>
+    {% endfor %}
+  </section>
+</div>
+
+<section class="panel">
+  <div class="section-head">
+    <div><h2>最近访问</h2><p>谁打开了你发布的页面；不在可见范围里的人会被拒绝</p></div>
+  </div>
+  {% if o.recent %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>访客</th><th>页面</th><th>时间</th><th>结果</th></tr></thead>
+      <tbody>
+        {% for a in o.recent %}
+        <tr>
+          <td>{{ a.name }}</td>
+          <td><a href="/me/pages/{{ a.page }}">{{ a.title or a.page }}</a></td>
+          <td title="{{ a.at|ts }}">{{ a.at|ago }}</td>
+          <td>{% if a.allowed %}<span class="status ok">已打开</span>{% else %}<span class="status warn">被拒绝</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">还没有访问记录。把页面链接发给可见范围里的同事，他们打开后这里会有记录。</p>
+  {% endif %}
+</section>
+{% endblock %}
